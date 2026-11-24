@@ -37,7 +37,7 @@ Then:
   when you left the group, it comes back with the group. A window larger than about 60% of
   the group counts as a separate app.
 - **Mission Control**: each grouped window carries its group's icons and name.
-- Each group's own menu: **Switch To**, **Even Out Sizes**, **Full Screen**, **Rename…**, **Ungroup**.
+- Each group's own menu: **Switch To**, **Add Windows…** (splits the tile you used last), **Remove from Group**, **Even Out Sizes**, **Full Screen**, **Rename…**, **Ungroup**.
 
 Other window tools (Pane, Rectangle) also react to window drags. Quit them if a tile misbehaves.
 

@@ -222,6 +222,30 @@ impl Layout {
         self.fit();
     }
 
+    /// A new window takes half of tile `i`, along its longer side. Returns its index.
+    pub fn split(&mut self, i: usize) -> usize {
+        fn walk(n: &mut Node, i: usize, r: Rect, new: usize) -> bool {
+            match n {
+                Node::Leaf(j) if *j == i => {
+                    let side = r.w >= r.h;
+                    let at = ((r.lo(side) + r.hi(side)) / 2.0).round();
+                    *n = Node::Split { side, at, a: Box::new(Node::Leaf(i)), b: Box::new(Node::Leaf(new)) };
+                    true
+                }
+                Node::Leaf(_) => false,
+                Node::Split { side, at, a, b } => {
+                    let (ra, rb) = r.cut(*side, *at);
+                    walk(a, i, ra, new) || walk(b, i, rb, new)
+                }
+            }
+        }
+        let new = self.mins.len();
+        self.mins.push((MIN_W, MIN_H));
+        walk(&mut self.root, i, self.region, new);
+        self.fit();
+        new
+    }
+
     /// Window `i` is gone: its neighbour takes the space.
     pub fn remove(&mut self, i: usize) {
         fn walk(n: Node, i: usize) -> Option<Node> {
@@ -399,6 +423,30 @@ mod tests {
         assert!(l.frames().iter().all(|f| f.w >= MIN_W));
         l.equalize();
         assert!(l.frames().iter().all(|f| f.w == 400.0));
+    }
+
+    #[test]
+    fn adding_splits_only_that_tile_along_its_longer_side() {
+        let mut l = two(); // both tiles are taller than wide
+        assert_eq!(l.split(1), 2);
+        let f = l.frames();
+        assert_eq!(f[0], r(0.0, 30.0, 500.0, 600.0));
+        assert_eq!(f[1], r(500.0, 30.0, 500.0, 300.0));
+        assert_eq!(f[2], r(500.0, 330.0, 500.0, 300.0));
+        l.split(2); // wider than tall now
+        assert_eq!(l.frames()[3], r(750.0, 330.0, 250.0, 300.0));
+        covers(&l);
+        l.remove(3);
+        l.remove(2);
+        assert_eq!(l.frames(), two().frames());
+    }
+
+    #[test]
+    fn adding_where_it_cannot_fit_is_noticed() {
+        let mut l = two();
+        l.learn_min(1, false, 560.0);
+        l.split(1);
+        assert!(!l.fits());
     }
 
     #[test]

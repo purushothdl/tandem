@@ -5,11 +5,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, Sel};
 use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, Message, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSButton, NSColor, NSControlSize,
+    NSApplication, NSAppearanceCustomization, NSBackingStoreType, NSBezierPath, NSButton, NSColor, NSControlSize,
     NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSFloatingWindowLevel, NSFont, NSImage,
-    NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSRunningApplication, NSScrollView,
-    NSStatusBarButton, NSTextField, NSTextFieldBezelStyle, NSTrackingArea, NSTrackingAreaOptions, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
+    NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSRunningApplication, NSScrollView, NSScroller, NSScrollerPart, NSScrollerStyle,
+    NSStatusBarButton, NSTextField, NSTextFieldBezelStyle, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURL};
 use std::cell::{Cell, RefCell};
@@ -24,6 +23,8 @@ struct Renamer {
 struct Chooser {
     panel: Retained<NSPanel>,
     rows: Vec<Retained<Row>>,
+    /// Add to this group (with this much room left) instead of making a new one.
+    target: Option<(u32, usize)>,
     tile: Retained<NSButton>,
 }
 
@@ -83,7 +84,15 @@ define_class!(
         }
         #[unsafe(method(openChooser:))]
         fn open_chooser(&self, _s: Option<&AnyObject>) {
-            self.show_chooser();
+            self.show_chooser(None);
+        }
+        #[unsafe(method(addWindows:))]
+        fn add_windows(&self, i: &NSMenuItem) {
+            self.show_chooser(Some(i.tag() as u32));
+        }
+        #[unsafe(method(removeWindow:))]
+        fn remove_window(&self, i: &NSMenuItem) {
+            self.say(app::remove_window(i.tag() as u32));
         }
         #[unsafe(method(cancelDialog:))]
         fn cancel_dialog(&self, _s: Option<&AnyObject>) {
@@ -91,9 +100,13 @@ define_class!(
         }
         #[unsafe(method(tileChosen:))]
         fn tile_chosen(&self, _s: Option<&AnyObject>) {
-            let picks = self.ivars().chooser.borrow().as_ref().map(ticked_rows).unwrap_or_default();
+            let chosen = self.ivars().chooser.borrow().as_ref().map(|c| (ticked_rows(c), c.target));
             self.close_dialogs();
-            self.say(app::tile_chosen(&picks));
+            match chosen {
+                Some((picks, Some((id, _)))) => self.say(app::add_windows(id, &picks)),
+                Some((picks, None)) => self.say(app::tile_chosen(&picks)),
+                None => {}
+            }
         }
         #[unsafe(method(renameDone:))]
         fn rename_done(&self, _s: Option<&AnyObject>) {
@@ -177,7 +190,7 @@ impl Handler {
             menu.addItem(&NSMenuItem::separatorItem(mtm));
             menu.addItem(&NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Groups"), mtm));
             for g in &m.groups {
-                menu.addItem(&self.group_item(mtm, g));
+                menu.addItem(&self.group_item(mtm, g, &m.windows));
             }
         }
 
@@ -198,7 +211,7 @@ impl Handler {
         app::MODAL.store(false, Ordering::Relaxed);
     }
 
-    /// The shared look of our dialogs: frosted, big title, quiet line under it, buttons below.
+    /// The shared look of our dialogs: solid, big title, quiet line under it, buttons below.
     /// Returns the panel, its content view and the default button.
     fn dialog(&self, w: f64, h: f64, title: &str, hint: &str, ok: &str, action: Sel) -> Dialog {
         self.close_dialogs();
@@ -206,7 +219,8 @@ impl Handler {
         let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
             mtm.alloc(),
             frame(0.0, 0.0, w, h),
-            NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView,
+            // non-activating: it takes the keyboard and the first click at once, whatever app is in use
+            NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView | NSWindowStyleMask::NonactivatingPanel,
             NSBackingStoreType::Buffered,
             false,
         );
@@ -223,12 +237,13 @@ impl Handler {
             }
         }
 
-        let view = NSVisualEffectView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, w, h));
-        view.setMaterial(NSVisualEffectMaterial::Popover);
-        view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        view.setState(NSVisualEffectState::Active);
+        // solid, so it looks the same over anything
+        let dark = panel.effectiveAppearance().name().to_string().contains("Dark");
+        let bg = if dark { NSColor::colorWithSRGBRed_green_blue_alpha(0.165, 0.169, 0.188, 1.0) } else { NSColor::whiteColor() };
+        panel.setBackgroundColor(Some(&bg));
+        let view = NSView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, w, h));
 
-        let t = label(mtm, title, 22.0, true, false);
+        let t = label(mtm, title, 20.0, true, false);
         t.setFrame(frame(MARGIN, h - 32.0 - 28.0, w - 2.0 * MARGIN, 28.0));
         view.addSubview(&t);
         let l = label(mtm, hint, 13.0, false, true);
@@ -243,8 +258,8 @@ impl Handler {
             view.addSubview(&b);
             b
         };
-        button("Cancel", sel!(cancelDialog:), "\u{1b}", w - MARGIN - 150.0 - 10.0 - 100.0, 100.0);
-        let ok = button(ok, action, "\r", w - MARGIN - 150.0, 150.0);
+        button("Cancel", sel!(cancelDialog:), "\u{1b}", w - MARGIN - 140.0 - 10.0 - 90.0, 90.0);
+        let ok = button(ok, action, "\r", w - MARGIN - 140.0, 140.0);
         Dialog { panel, view, ok }
     }
 
@@ -252,20 +267,27 @@ impl Handler {
         d.panel.setContentView(Some(&d.view));
         d.panel.center();
         app::MODAL.store(true, Ordering::Relaxed);
-        NSApplication::sharedApplication(self.mtm()).activate();
         d.panel.makeKeyAndOrderFront(None);
     }
 
     /// Stays open: pick rows, then Tile.
-    fn show_chooser(&self) {
+    fn show_chooser(&self, add_to: Option<u32>) {
         let mtm = self.mtm();
-        let windows = app::menu_model().windows;
-        const ROW: f64 = 64.0;
-        const W: f64 = 480.0;
+        let m = app::menu_model();
+        let group = add_to.and_then(|id| m.groups.iter().find(|g| g.id == id));
+        let target = group.map(|g| (g.id, app::MAX_TILES.saturating_sub(g.tiles.len())));
+        let (title, hint) = match group {
+            Some(g) => ("Add Windows", format!("They join “{}” next to the one you used last.", g.name)),
+            None => ("Choose Windows", "Select two or more windows to tile together.".to_string()),
+        };
+        let windows: Vec<MenuWindow> =
+            m.windows.into_iter().filter(|w| !group.is_some_and(|g| g.tiles.iter().any(|t| t.wid == w.wid))).collect();
+        const ROW: f64 = 56.0;
+        const W: f64 = 420.0;
         let content_h = windows.len().max(1) as f64 * ROW;
-        let list_h = content_h.min(6.5 * ROW);
+        let list_h = content_h.min(6.0 * ROW);
         let h = HEAD + list_h + FOOT;
-        let d = self.dialog(W, h, "Choose Windows", "Select two or more windows to tile together.", "Tile", sel!(tileChosen:));
+        let d = self.dialog(W, h, title, &hint, "Tile", sel!(tileChosen:));
 
         let list = NSView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, W, content_h));
         let mut rows = Vec::new();
@@ -279,20 +301,24 @@ impl Handler {
         scroll.setDrawsBackground(false);
         scroll.setHasVerticalScroller(content_h > list_h);
         scroll.setAutohidesScrollers(true);
+        scroll.setScrollerStyle(NSScrollerStyle::Overlay);
+        let bar: Retained<SlimScroller> = unsafe { msg_send![mtm.alloc::<SlimScroller>(), initWithFrame: frame(0.0, 0.0, 10.0, list_h)] };
+        scroll.setVerticalScroller(Some(&bar));
+        scroll.setScrollerStyle(NSScrollerStyle::Overlay);
         scroll.setDocumentView(Some(&list));
         // start at the top of the list
         list.scrollPoint(NSPoint::new(0.0, content_h));
         d.view.addSubview(&scroll);
 
         self.open(&d);
-        *self.ivars().chooser.borrow_mut() = Some(Chooser { panel: d.panel, rows, tile: d.ok });
+        *self.ivars().chooser.borrow_mut() = Some(Chooser { panel: d.panel, rows, target, tile: d.ok });
         self.update_chooser();
     }
 
     fn show_renamer(&self, id: u32) {
         let Some(now) = app::name_of(id) else { return };
         let mtm = self.mtm();
-        const W: f64 = 420.0;
+        const W: f64 = 380.0;
         let d = self.dialog(W, HEAD + 120.0 + FOOT, "Rename Group", "The name appears in Mission Control and the menu.", "Rename", sel!(renameDone:));
         let img = icons(mtm, &app::tiles_of(id), 44.0);
         let size = img.size();
@@ -314,14 +340,22 @@ impl Handler {
     fn update_chooser(&self) {
         if let Some(c) = &*self.ivars().chooser.borrow() {
             let n = ticked_rows(c).len();
-            c.tile.setEnabled((2..=app::MAX_TILES).contains(&n));
-            let t = if n < 2 { "Tile".to_string() } else { format!("Tile {n} Windows") };
+            let (verb, range) = match c.target {
+                Some((_, room)) => ("Add", 1..=room),
+                None => ("Tile", 2..=app::MAX_TILES),
+            };
+            c.tile.setEnabled(range.contains(&n));
+            let t = match n {
+                0 => verb.to_string(),
+                1 => format!("{verb} 1 Window"),
+                _ => format!("{verb} {n} Windows"),
+            };
             c.tile.setTitle(&NSString::from_str(&t));
         }
     }
 
     /// Clicking opens the group's own commands.
-    fn group_item(&self, mtm: MainThreadMarker, g: &MenuGroup) -> Retained<NSMenuItem> {
+    fn group_item(&self, mtm: MainThreadMarker, g: &MenuGroup, windows: &[MenuWindow]) -> Retained<NSMenuItem> {
         let i = self.item(&g.name, "", None, g.id);
         i.setEnabled(true);
         i.setImage(Some(&icons(mtm, &g.tiles, 22.0)));
@@ -329,6 +363,27 @@ impl Handler {
         let sub = NSMenu::new(mtm);
         sub.setAutoenablesItems(false);
         sub.addItem(&self.item("Switch To", "arrow.up.forward.app", Some(sel!(switchTo:)), g.id));
+        sub.addItem(&NSMenuItem::separatorItem(mtm));
+        let room = g.tiles.len() < app::MAX_TILES;
+        sub.addItem(&self.item("Add Windows…", "plus.rectangle.on.rectangle", room.then_some(sel!(addWindows:)), g.id));
+        let out = NSMenu::new(mtm);
+        out.setAutoenablesItems(false);
+        for t in &g.tiles {
+            let mut name = app::app_name(t.pid);
+            // two windows of one app need telling apart
+            if g.tiles.iter().filter(|o| o.pid == t.pid).count() > 1 {
+                if let Some(title) = windows.iter().find(|w| w.wid == t.wid).map(|w| &w.title).filter(|t| !t.is_empty()) {
+                    name = format!("{name} — {}", title.chars().take(36).collect::<String>());
+                }
+            }
+            let i = self.item(&name, "", Some(sel!(removeWindow:)), t.wid);
+            i.setImage(icon(t.pid, 18.0).as_deref());
+            out.addItem(&i);
+        }
+        let r = self.item("Remove from Group", "minus.rectangle", None, 0);
+        r.setEnabled(true);
+        r.setSubmenu(Some(&out));
+        sub.addItem(&r);
         sub.addItem(&NSMenuItem::separatorItem(mtm));
         sub.addItem(&self.item("Even Out Sizes", "equal.square", Some(sel!(equalize:)), g.id));
         let full = if g.full { "Leave Full Screen" } else { "Full Screen" };
@@ -376,14 +431,38 @@ fn label(mtm: MainThreadMarker, text: &str, size: f64, bold: bool, quiet: bool) 
     l
 }
 
-const MARGIN: f64 = 32.0;
+define_class!(
+    // A thin, pale bar instead of the thick round one.
+    #[unsafe(super(NSScroller))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WGSlimScroller"]
+    struct SlimScroller;
+
+    impl SlimScroller {
+        #[unsafe(method(isCompatibleWithOverlayScrollers))]
+        fn overlay_ok() -> bool {
+            true
+        }
+        #[unsafe(method(drawKnob))]
+        fn draw_knob(&self) {
+            let k = self.rectForPart(NSScrollerPart::Knob);
+            let r = frame(k.origin.x + k.size.width - 7.0, k.origin.y + 2.0, 4.0, (k.size.height - 4.0).max(8.0));
+            NSColor::labelColor().colorWithAlphaComponent(0.22).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 1.5, 1.5).fill();
+        }
+        #[unsafe(method(drawKnobSlotInRect:highlight:))]
+        fn draw_slot(&self, _r: NSRect, _h: bool) {}
+    }
+);
+
+const MARGIN: f64 = 28.0;
 /// Space above a dialog's content (title and hint) and below it (buttons).
 const HEAD: f64 = 32.0 + 28.0 + 6.0 + 18.0 + 20.0;
 const FOOT: f64 = 78.0;
 
 struct Dialog {
     panel: Retained<NSPanel>,
-    view: Retained<NSVisualEffectView>,
+    view: Retained<NSView>,
     ok: Retained<NSButton>,
 }
 
@@ -413,6 +492,16 @@ define_class!(
             self.show();
             self.ivars().owner.update_chooser();
         }
+        // labels and icons inside must not take the click from the row
+        #[unsafe(method(hitTest:))]
+        fn hit_test(&self, p: NSPoint) -> *const NSView {
+            let hit: *const NSView = unsafe { msg_send![super(self), hitTest: p] };
+            if hit.is_null() {
+                return hit;
+            }
+            let me: &NSView = self;
+            me
+        }
         #[unsafe(method(mouseEntered:))]
         fn mouse_entered(&self, _e: &NSEvent) {
             self.ivars().hover.set(true);
@@ -436,7 +525,7 @@ define_class!(
 
 impl Row {
     fn new(mtm: MainThreadMarker, r: NSRect, w: &MenuWindow, owner: &Handler) -> Retained<Self> {
-        const ICON: f64 = 44.0;
+        const ICON: f64 = 38.0;
         let (width, h) = (r.size.width, r.size.height);
         let check = NSImageView::initWithFrame(mtm.alloc(), frame(width - 38.0, (h - 24.0) / 2.0, 24.0, 24.0));
         let (x, tw) = (12.0 + ICON + 14.0, width - (12.0 + ICON + 14.0) - 50.0);

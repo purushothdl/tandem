@@ -65,6 +65,8 @@ struct Group {
     /// Windows gliding to `expected`: where each started, and when.
     glide: Option<(Vec<Rect>, Instant)>,
     name: String,
+    /// The user chose the name.
+    named: bool,
     full: bool,
     windowed: Option<Rect>,
 }
@@ -202,6 +204,13 @@ impl Group {
         }
     }
 
+    /// Keep the automatic name in step, unless the user chose one.
+    fn auto_name(&mut self) {
+        if !self.named {
+            self.name = default_name(self);
+        }
+    }
+
     /// One frame of the glide: fast start, soft landing.
     fn step(&mut self) {
         let Some((from, t0)) = &self.glide else { return };
@@ -336,17 +345,81 @@ impl App {
         }) else {
             return;
         };
+        self.drop_member(gi, mi);
+    }
+
+    /// Take a window out of its group; the neighbour gets its space.
+    fn drop_member(&mut self, gi: usize, mi: usize) {
         self.drag = None;
         let g = &mut self.groups[gi];
-        g.members.remove(mi);
+        let wid = g.members.remove(mi).wid;
+        g.stack.retain(|s| s.1 != wid);
         if g.members.len() < 2 {
             self.groups.remove(gi);
             self.leave_chrome_if_idle();
         } else {
             g.layout.remove(mi);
-            g.expected.clear();
+            g.auto_name();
             g.place_smoothly(&ax::window_order());
         }
+    }
+
+    /// Add windows to a group, splitting the tile last used.
+    fn add_to(&mut self, id: u32, picks: &[(i32, u32)]) -> String {
+        let order = ax::window_order();
+        let mut spots: Vec<u32> = Vec::new(); // tiles we may split: the one in use, and what we add
+        let mut added = 0;
+        let mut refused = None;
+        for &(pid, wid) in picks {
+            if self.groups.iter().any(|g| g.id == id && g.has(wid).is_some()) {
+                continue;
+            }
+            let Some(g) = self.groups.iter().find(|g| g.id == id) else { return "No group".into() };
+            if g.members.len() >= MAX_TILES {
+                refused = Some(format!("No more room: a group holds {MAX_TILES} windows"));
+                break;
+            }
+            let Some(m) = Member::open(pid, wid) else { continue };
+            let frames = g.layout.frames();
+            let area = |i: usize| frames[i].w * frames[i].h;
+            let largest = |v: &[usize]| v.iter().copied().max_by(|a, b| area(*a).total_cmp(&area(*b)));
+            if spots.is_empty() {
+                spots.push(g.members[g.has(g.used).unwrap_or(0)].wid);
+            }
+            let near: Vec<usize> = spots.iter().filter_map(|w| g.has(*w)).collect();
+            let all: Vec<usize> = (0..g.members.len()).collect();
+            // where the user works; failing that, the largest tile
+            let Some(layout) = [largest(&near), largest(&all)].into_iter().flatten().find_map(|i| {
+                let mut l = g.layout.clone();
+                l.split(i);
+                l.fits().then_some(l)
+            }) else {
+                refused = Some(format!("No room for {}: the tiles would get too small", app_name(pid)));
+                continue;
+            };
+            // a window is only ever in one group
+            if let Some((gi, mi)) = self.groups.iter().enumerate().find_map(|(gi, g)| g.has(wid).map(|mi| (gi, mi))) {
+                self.drop_member(gi, mi);
+            }
+            for other in &mut self.groups {
+                other.panes.retain(|p| *p != wid);
+                other.stack.retain(|s| s.1 != wid);
+            }
+            self.subscribe(pid, &m.elem);
+            let Some(g) = self.groups.iter_mut().find(|g| g.id == id) else { return "No group".into() };
+            g.layout = layout;
+            g.members.push(m);
+            spots.push(wid);
+            added += 1;
+        }
+        if added > 0 {
+            self.drag = None;
+            if let Some(g) = self.groups.iter_mut().find(|g| g.id == id) {
+                g.auto_name();
+                g.place_smoothly(&order);
+            }
+        }
+        refused.unwrap_or_else(|| format!("Added {added}"))
     }
 
     /// Minimum widths the writers found out. Applied even mid-drag, so the seam stops dead.
@@ -421,6 +494,13 @@ impl App {
                 self.drag = None;
                 if self.groups.is_empty() {
                     return Verdict::Pass;
+                }
+                // a press on one of our own dialogs is not a press on the tile behind it
+                if MODAL.load(std::sync::atomic::Ordering::Relaxed) {
+                    let me = std::process::id() as i32;
+                    if ax::all_windows().iter().any(|w| w.pid == me && w.bounds.h > 60.0 && w.bounds.w > 60.0 && w.bounds.contains(x, y)) {
+                        return Verdict::Pass;
+                    }
                 }
                 if let Some((gi, k)) = self.seam_at(x, y) {
                     let g = &mut self.groups[gi];
@@ -649,6 +729,7 @@ impl App {
             used: 0,
             glide: None,
             name: String::new(),
+            named: false,
             full: false,
             windowed: None,
         };
@@ -791,6 +872,25 @@ pub fn tile_chosen(picks: &[(i32, u32)]) -> String {
         switch_to(id);
     }
     msg
+}
+
+/// Add these windows to a group.
+pub fn add_windows(id: u32, picks: &[(i32, u32)]) -> String {
+    let msg = with(|a| a.add_to(id, picks));
+    if msg.starts_with("Added") {
+        switch_to(id);
+    }
+    msg
+}
+
+pub fn remove_window(wid: u32) -> String {
+    with(|a| {
+        let Some((gi, mi)) = a.groups.iter().enumerate().find_map(|(gi, g)| g.has(wid).map(|mi| (gi, mi))) else {
+            return "No such window in a group".into();
+        };
+        a.drop_member(gi, mi);
+        "Removed".into()
+    })
 }
 
 /// Which group a menu command is about: a given one, or the one in use.
@@ -985,13 +1085,14 @@ pub fn name_of(id: u32) -> Option<String> {
 }
 
 pub fn tiles_of(id: u32) -> Vec<Tile> {
-    with(|a| a.groups.iter().filter(|g| g.id == id).flat_map(|g| &g.members).map(|m| Tile { pid: m.pid }).collect())
+    with(|a| a.groups.iter().filter(|g| g.id == id).flat_map(|g| &g.members).map(|m| Tile { pid: m.pid, wid: m.wid }).collect())
 }
 
 pub fn rename(id: u32, name: &str) -> String {
     with(|a| match a.groups.iter_mut().find(|g| g.id == id) {
         Some(g) if !name.trim().is_empty() => {
             g.name = name.trim().to_string();
+            g.named = true;
             format!("Named “{}”", g.name)
         }
         _ => "Name unchanged".into(),
@@ -1002,6 +1103,7 @@ pub fn rename(id: u32, name: &str) -> String {
 
 pub struct Tile {
     pub pid: i32,
+    pub wid: u32,
 }
 
 pub struct MenuGroup {
@@ -1058,7 +1160,7 @@ pub fn menu_model() -> MenuModel {
         let preview = (free.len() >= 2).then(|| {
             let mut v = free.clone();
             v.sort_by(|a, b| a.bounds.x.total_cmp(&b.bounds.x).then(a.bounds.y.total_cmp(&b.bounds.y)));
-            v.iter().map(|w| Tile { pid: w.pid }).collect()
+            v.iter().map(|w| Tile { pid: w.pid, wid: w.id }).collect()
         });
         let groups = a
             .groups
@@ -1066,7 +1168,7 @@ pub fn menu_model() -> MenuModel {
             .map(|g| MenuGroup {
                 id: g.id,
                 name: g.name.clone(),
-                tiles: g.members.iter().map(|m| Tile { pid: m.pid }).collect(),
+                tiles: g.members.iter().map(|m| Tile { pid: m.pid, wid: m.wid }).collect(),
                 active: a.active == Some(g.id),
                 full: g.full,
             })
