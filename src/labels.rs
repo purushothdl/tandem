@@ -110,7 +110,7 @@ fn build(mtm: MainThreadMarker, l: &Label) -> Shown {
 }
 
 /// Move a panel's opacity a step towards where it should be.
-pub fn fade(p: &NSPanel, on: bool, now: &mut f64) {
+fn fade(p: &NSPanel, on: bool, now: &mut f64) {
     let next = if on { (*now + 0.16).min(1.0) } else { (*now - 0.22).max(0.0) };
     if next == *now {
         return;
@@ -169,21 +169,30 @@ pub fn refresh(mtm: MainThreadMarker, mx: f64, my: f64, screen_h: f64) {
                 MOVED.set(Some(Instant::now()));
             }
         }
+        if MOVED.get().is_none() {
+            MOVED.set(Some(Instant::now()));
+        }
         let still = MOVED.get().is_none_or(|t| t.elapsed() > STILL);
-        // pointing at a group's card outlines all of its windows
-        let card = crate::cards::refresh(mtm, still, mx, my, screen_h);
+        // pointing at a group in the bar outlines all of its windows
+        let calm = MOVED.get().map_or(Duration::ZERO, |t| t.elapsed());
+        let bar = crate::cards::refresh(mtm, calm, mx, my, screen_h);
+        if bar.away {
+            s.values_mut().for_each(hide);
+            return;
+        }
         let hovered = labels.iter().find(|l| l.hovered).map(|l| (l.group, l.wid));
         for l in &labels {
             let Some(o) = s.get_mut(&l.wid) else { continue };
-            if still && o.pill_on == 0.0 {
+            if still && o.pill_on == 0.0 && o.ring_on == 0.0 {
                 let y = l.at.y + 10.0;
                 o.pill.setFrame_display(rect(l.at.x + (l.at.w - o.width) / 2.0, screen_h - y - H, o.width, H), true);
                 let r = Rect { x: l.at.x - RING, y: l.at.y - RING, w: l.at.w + 2.0 * RING, h: l.at.h + 2.0 * RING };
                 o.ring.setFrame_display(rect(r.x, screen_h - r.bottom(), r.w, r.h), true);
             }
-            fade(&o.pill, still, &mut o.pill_on);
+            // the bar says it already
+            fade(&o.pill, still && !bar.showing, &mut o.pill_on);
             // macOS outlines the one under the pointer itself; its partners are ours
-            let partner = card == Some(l.group) || hovered.is_some_and(|(g, wid)| g == l.group && wid != l.wid);
+            let partner = bar.hot == Some(l.group) || hovered.is_some_and(|(g, wid)| g == l.group && wid != l.wid);
             fade(&o.ring, still && partner, &mut o.ring_on);
         }
     });

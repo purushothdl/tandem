@@ -1809,6 +1809,50 @@ pub struct Card {
     pub tiles: Vec<(Rect, i32)>,
 }
 
+/// A layout with big tiles for this many apps, so that every icon has room: two halves,
+/// a half and two quarters, or a grid. Of those, the one closest to the real one, each
+/// app in the place nearest to where it really is.
+fn even(tiles: Vec<(Rect, i32)>) -> Vec<(Rect, i32)> {
+    if tiles.len() < 2 {
+        return tiles;
+    }
+    let all = presets(tiles.len());
+    let choices = match tiles.len() {
+        2 => 0..2,
+        3 => 1..4, // the half on the left, on the right, on top
+        _ => 0..1,
+    };
+    let best = choices
+        .filter_map(|k| all.get(k))
+        .map(|p| assign(&tiles, &p.rects))
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    best.map_or(tiles, |b| b.1)
+}
+
+/// Give each tile the nearest of these places still free, and how far they moved in all.
+fn assign(tiles: &[(Rect, i32)], places: &[Rect]) -> (f64, Vec<(Rect, i32)>) {
+    let mid = |r: &Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, (t, _)) in tiles.iter().enumerate() {
+        for (k, r) in places.iter().enumerate() {
+            let ((x, y), (u, v)) = (mid(t), mid(r));
+            // a little for the size too: the big app gets the big place
+            pairs.push(((x - u).hypot(y - v) + 0.3 * (t.w * t.h - r.w * r.h).abs(), i, k));
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = tiles.to_vec();
+    let (mut total, mut used, mut done) = (0.0, vec![false; places.len()], vec![false; tiles.len()]);
+    for (d, i, k) in pairs {
+        if !done[i] && !used[k] {
+            (done[i], used[k]) = (true, true);
+            out[i].0 = places[k];
+            total += d;
+        }
+    }
+    (total, out)
+}
+
 /// A card per group with a window on screen, the group in use first, and the places taken
 /// by thumbnails and what Mission Control draws on them.
 pub fn mission_control_cards() -> Option<(Vec<Card>, Vec<Rect>)> {
@@ -1825,11 +1869,11 @@ pub fn mission_control_cards() -> Option<(Vec<Card>, Vec<Rect>)> {
                 let r = g.layout.region();
                 let part = |f: &Rect| Rect { x: (f.x - r.x) / r.w, y: (f.y - r.y) / r.h, w: f.w / r.w, h: f.h / r.h };
                 let frames = g.layout.frames();
-                let tiles = (frames.iter().zip(&g.members).enumerate())
+                let tiles: Vec<(Rect, i32)> = (frames.iter().zip(&g.members).enumerate())
                     .filter(|(i, (f, _))| !g.layout.is_hidden(*i) && f.w > 1.0 && f.h > 1.0)
                     .map(|(_, (f, m))| (part(f), m.pid))
                     .collect();
-                Card { group: g.id, name: g.name.clone(), tiles }
+                Card { group: g.id, name: g.name.clone(), tiles: even(tiles) }
             })
             .collect();
         cards.sort_by_key(|c| a.active != Some(c.group));
@@ -1841,4 +1885,24 @@ pub fn mission_control_cards() -> Option<(Vec<Card>, Vec<Rect>)> {
 
 fn primary_bounds(all: &[WinInfo]) -> Option<Rect> {
     all.iter().find(|w| w.layer == 18).map(|w| w.bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previews_have_big_tiles() {
+        let col = |i: f64, n: f64| Rect { x: i / n, y: 0.0, w: 1.0 / n, h: 1.0 };
+        for n in 2..=6usize {
+            let out = even((0..n).map(|i| (col(i as f64, n as f64), i as i32)).collect());
+            let mut areas: Vec<f64> = out.iter().map(|t| t.0.w * t.0.h).collect();
+            areas.sort_by(f64::total_cmp);
+            assert!((areas.iter().sum::<f64>() - 1.0).abs() < 1e-6);
+            assert!(areas[0] >= [0.5, 0.25, 0.25, 0.16, 0.16][n - 2], "{n}: {areas:?}");
+            if n == 3 {
+                assert!((areas[2] - 0.5).abs() < 1e-6);
+            }
+        }
+    }
 }
