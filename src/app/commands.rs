@@ -5,7 +5,7 @@ use crate::core::layout::{Layout, presets};
 use crate::core::window::{self, Window, WindowRef};
 use crate::platform::element::{find_window, is_trusted};
 use crate::platform::log::log;
-use crate::platform::{dock, focus, screen, timer, windows};
+use crate::platform::{corners, dock, focus, screen, timer, windows};
 use std::time::Duration;
 
 /// What was done, or what to tell the user.
@@ -204,6 +204,15 @@ fn use_freed_space() {
             g.place();
         }
     });
+}
+
+/// Apps pick this up when they are next opened.
+pub fn set_corners(radius: u32) -> Outcome {
+    if corners::set_radius(radius) {
+        Ok(format!("Corners {radius}"))
+    } else {
+        Err("No change: macOS refused it".into())
+    }
 }
 
 /// Leave the system as it was.

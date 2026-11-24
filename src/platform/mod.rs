@@ -1,6 +1,7 @@
 //! Every call into macOS, wrapped so the rest of the program needs no `unsafe`.
 
 pub mod apps;
+pub mod corners;
 pub mod dock;
 pub mod element;
 pub mod focus;

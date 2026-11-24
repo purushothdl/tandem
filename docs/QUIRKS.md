@@ -35,6 +35,8 @@ Found by trying. Each one explains code that would otherwise look odd.
 
 ## The system
 
+- `NSConvolutionOverride1` sets the corner radius of windows. 1 is square; 0 counts as unset.
+  Apps read it when they start.
 - A slow mouse tap is switched off by macOS and must be switched on again.
 - Ad-hoc signing changes the app's identity on every build and loses the Accessibility
   permission. `bundle.sh` pins it to the bundle id.

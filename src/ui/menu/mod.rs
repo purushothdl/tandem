@@ -8,7 +8,7 @@ mod layout_strip;
 use crate::app;
 use crate::app::commands::{self, Outcome};
 use crate::app::views::{self, MenuGroup, MenuWindow, app_names};
-use crate::platform::apps;
+use crate::platform::{apps, corners};
 use crate::ui::widgets::*;
 use dialogs::{Chooser, Renamer};
 use group_row::{GroupRow, light};
@@ -17,8 +17,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSCellImagePosition, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar,
-    NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength, NSWorkspace,
+    NSApplication, NSCellImagePosition, NSControlStateValueOn, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate,
+    NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_foundation::{NSSize, NSString, NSURL};
 use std::cell::RefCell;
@@ -111,6 +111,10 @@ define_class!(
             if let Some((id, name)) = new {
                 self.report(commands::rename(id, &name));
             }
+        }
+        #[unsafe(method(setCorners:))]
+        fn set_corners(&self, i: &NSMenuItem) {
+            self.report(commands::set_corners(i.tag() as u32));
         }
         #[unsafe(method(openPrivacy:))]
         fn open_privacy(&self, _s: Option<&AnyObject>) {
@@ -231,7 +235,27 @@ impl Handler {
         if m.groups.len() > 1 {
             menu.addItem(&self.item("Ungroup All", "rectangle.dashed", Some(sel!(ungroupAll:)), 0));
         }
+        menu.addItem(&self.corners_item());
         menu.addItem(&self.item("Quit wingroup", "power", Some(sel!(quit:)), 0));
+    }
+
+    fn corners_item(&self) -> Retained<NSMenuItem> {
+        let sub = NSMenu::new(self.mtm());
+        sub.setAutoenablesItems(false);
+        let now = corners::radius();
+        for (name, radius) in corners::CHOICES {
+            let i = self.item(name, "", Some(sel!(setCorners:)), radius);
+            if radius == now {
+                i.setState(NSControlStateValueOn);
+            }
+            sub.addItem(&i);
+        }
+        sub.addItem(&NSMenuItem::separatorItem(self.mtm()));
+        sub.addItem(&self.item("Reopen apps to see it", "", None, 0));
+        let i = self.item("Window Corners", "square", None, 0);
+        i.setEnabled(true);
+        i.setSubmenu(Some(&sub));
+        i
     }
 
     /// A row that switches to the group when clicked; its submenu opens beside it on hover.

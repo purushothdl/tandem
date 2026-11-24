@@ -8,8 +8,7 @@ Written in Rust. No dependencies beyond bindings to macOS.
 ## Build and run
 
 ```sh
-./bundle.sh
-open target/wingroup.app
+./bundle.sh install     # builds it, puts it in /Applications and opens it
 ```
 
 Allow it in System Settings > Privacy & Security > Accessibility, then quit and reopen it.
@@ -25,6 +24,7 @@ Rebuilding keeps the permission.
 | Add | Hold Shift while dragging a window onto half of a tile |
 | Change the layout | Hover the group in the menu, or ⌃⌥L |
 | Switch | Click any window of the group, Cmd-Tab, the menu, or the bar in Mission Control |
+| Change corners | Menu > **Window Corners**, then reopen apps |
 | Everything else | The group's submenu |
 
 A small window over a group stays with it, as in plain macOS. A large one counts as separate.

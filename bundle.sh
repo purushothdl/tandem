@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds target/wingroup.app (menu-bar only, no Dock icon) so the
+# Builds target/wingroup.app; with "install" also puts it in /Applications.
+# Menu-bar only, no Dock icon. An app bundle so the
 # Accessibility permission attaches to wingroup itself, not to your terminal.
 set -e
 cd "$(dirname "$0")"
@@ -29,3 +30,9 @@ PLIST
 # Accessibility grant each time.
 codesign --force --sign - -r='designated => identifier "dev.local.wingroup"' "$APP"
 echo "Built $APP"
+if [ "$1" = install ]; then
+  pkill -x wingroup || true
+  ditto "$APP" /Applications/wingroup.app
+  open /Applications/wingroup.app
+  echo "Installed in /Applications"
+fi
