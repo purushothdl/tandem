@@ -5,7 +5,7 @@ use crate::ax::Elem;
 use crate::layout::Rect;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// (window id, is it the width, smallest size the app accepts), waiting for the main thread.
 static MINIMUMS: Mutex<Vec<(u32, bool, f64)>> = Mutex::new(Vec::new());
@@ -54,26 +54,29 @@ fn place(el: &Elem, now: Rect, to: Rect) -> Option<Rect> {
 }
 
 fn run(el: &Elem, wid: u32, rx: &Receiver<Rect>) {
-    // (asked, got) of the last refusal per axis, to tell a real minimum from a slow app
-    let mut refused: [Option<(f64, f64)>; 2] = [None, None];
+    // (asked, got, since when) of a refusal per axis, to tell a real minimum from an app that
+    // is slow or busy for a moment
+    let mut refused: [Option<(f64, f64, Instant)>; 2] = [None, None];
     while let Ok(mut target) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
             target = newer;
         }
         let mut tries = 0;
         let Some(mut now) = el.frame() else { continue };
-        while !close(&now, &target) && tries < 5 {
+        while !close(&now, &target) && tries < 8 {
             let Some(got) = place(el, now, target) else { break };
             now = got;
             let newest = rx.try_iter().last();
             for (axis, asked, got) in [(0, target.w, now.w), (1, target.h, now.h)] {
                 if got > asked + 2.0 {
                     // same size for two different requests, or still refusing when idle
-                    let same = refused[axis].is_some_and(|(a, g)| a != asked && g == got);
-                    if same || (newest.is_none() && tries >= 2) {
+                    let before = refused[axis].filter(|r| r.1 == got);
+                    let lasting = before.is_some_and(|r| r.2.elapsed() > Duration::from_millis(60));
+                    let same = before.is_some_and(|r| r.0 != asked);
+                    if lasting && (same || newest.is_none()) {
                         MINIMUMS.lock().unwrap().push((wid, axis == 0, got.ceil()));
                     }
-                    refused[axis] = Some((asked, got));
+                    refused[axis] = Some((asked, got, before.map_or_else(Instant::now, |r| r.2)));
                 } else {
                     refused[axis] = None;
                 }

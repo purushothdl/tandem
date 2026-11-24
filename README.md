@@ -29,8 +29,8 @@ Then:
 
 - **Resize**: drag the bar between windows (it shows on hover). It stops at each app's
   minimum size. Double-click it to even the split.
-- **Moving a tile** by its title bar, or resizing it by another edge, has no effect on the
-  group: it glides back when you let go.
+- **Swap**: drag a tile by its title bar onto another tile and they trade places. Dropped
+  anywhere else, or resized by another edge, it glides back.
 - **Switch**: clicking one window, Cmd-Tab or Mission Control brings its whole group.
 - **Panes**: a smaller window over the group behaves as in plain macOS: clicking a tile puts
   that tile in front of it, clicking the other tile sends it fully behind. If it was in front
@@ -39,7 +39,7 @@ Then:
 - **Mission Control**: each grouped window carries its group's icons and name.
 - Each group's own menu: **Switch To**, **Add Windows…** (splits the tile you used last), **Remove from Group**, **Even Out Sizes**, **Full Screen**, **Rename…**, **Ungroup**.
 
-Other window tools (Pane, Rectangle) also react to window drags. Quit them if a tile misbehaves.
+Rectangle can stay on. If it also snaps a tile you drop near a screen edge, wingroup puts it back.
 
 ## If something goes wrong
 

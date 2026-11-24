@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSFloatingWindowLevel, NSNormalWindowLevel, NSPanel, NSScreen,
+    NSBackingStoreType, NSColor, NSFloatingWindowLevel, NSNormalWindowLevel, NSPanel, NSScreen, NSView,
     NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -42,6 +42,9 @@ struct GroupOverlay {
     bars: Vec<Retained<NSPanel>>,
     /// Plain panel behind the group while it resizes, so a slow app never shows what is underneath.
     backdrop: Retained<NSPanel>,
+    /// Marks the tile a dragged one would trade places with.
+    target: Retained<NSPanel>,
+    target_shown: Option<Rect>,
     bar_shown: Option<(usize, Rect)>,
     backdrop_on: bool,
 }
@@ -76,7 +79,18 @@ fn build(mtm: MainThreadMarker, v: &GroupView) -> GroupOverlay {
     backdrop.setLevel(NSNormalWindowLevel);
     backdrop.setOpaque(true);
     backdrop.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
-    GroupOverlay { bars, backdrop, bar_shown: None, backdrop_on: false }
+    let target = panel(mtm, zero);
+    let tv = NSView::initWithFrame(mtm.alloc(), zero);
+    tv.setWantsLayer(true);
+    if let Some(l) = tv.layer() {
+        let accent = NSColor::controlAccentColor();
+        l.setBackgroundColor(Some(&accent.colorWithAlphaComponent(0.22).CGColor()));
+        l.setBorderColor(Some(&accent.colorWithAlphaComponent(0.9).CGColor()));
+        l.setBorderWidth(3.0);
+        l.setCornerRadius(12.0);
+    }
+    target.setContentView(Some(&tv));
+    GroupOverlay { target, target_shown: None, bars, backdrop, bar_shown: None, backdrop_on: false }
 }
 
 fn bar_rect(s: &Seam) -> Rect {
@@ -91,6 +105,7 @@ fn bar_rect(s: &Seam) -> Rect {
 fn hide(o: &GroupOverlay) {
     o.bars.iter().for_each(|b| b.orderOut(None::<&AnyObject>));
     o.backdrop.orderOut(None::<&AnyObject>);
+    o.target.orderOut(None::<&AnyObject>);
 }
 
 /// `mx`, `my`: the pointer, in accessibility coordinates.
@@ -117,6 +132,17 @@ pub fn refresh_at(mx: f64, my: f64) {
                     o.backdrop_on = false;
                 }
                 _ => {}
+            }
+            if v.drop != o.target_shown {
+                match v.drop {
+                    Some(r) => {
+                        let inset = Rect { x: r.x + 6.0, y: r.y + 6.0, w: r.w - 12.0, h: r.h - 12.0 };
+                        o.target.setFrame_display(cocoa(inset, h), true);
+                        o.target.orderFrontRegardless();
+                    }
+                    None => o.target.orderOut(None::<&AnyObject>),
+                }
+                o.target_shown = v.drop;
             }
             let want = v.hot.and_then(|k| v.seams.get(k).map(|s| (k, bar_rect(s))));
             if want == o.bar_shown {

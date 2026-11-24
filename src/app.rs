@@ -64,6 +64,8 @@ struct Group {
     layout: Layout,
     expected: Vec<Rect>,
     changed_at: Instant,
+    /// Put the windows in place at this moment (after a drop).
+    settle_at: Option<Instant>,
     /// Last time the user actually moved a seam.
     seam_moved_at: Option<Instant>,
     /// Windows gliding to `expected`: where each started, and when.
@@ -91,6 +93,8 @@ struct App {
     /// The window on top in Mission Control; a change means one was picked.
     mc_top: u32,
     front_pid: i32,
+    /// A press on a tile that may become a title-bar drag.
+    press: Option<Press>,
     /// In Mission Control: what was on top when it opened (pid, window id).
     mc_origin: Option<(i32, u32)>,
     /// The window being hovered there, and since when.
@@ -116,6 +120,7 @@ thread_local! {
         mc_seen: None,
         mc_top: 0,
         front_pid: 0,
+        press: None,
         mc_origin: None,
         mc_hover: None,
         prepared: None,
@@ -427,6 +432,19 @@ impl Group {
     }
 }
 
+struct Press {
+    group: u32,
+    wid: u32,
+    /// Where the pointer and the window were.
+    at: (f64, f64),
+    from: Rect,
+    /// The window is really being dragged (not text selected in it).
+    moving: bool,
+    looked: Instant,
+    /// The tile it would trade places with.
+    over: Option<u32>,
+}
+
 enum Verdict {
     /// Not ours.
     Pass,
@@ -638,6 +656,7 @@ impl App {
                     return Verdict::Swallow;
                 }
                 self.verify = None;
+                self.press = None;
                 let all = ax::all_windows();
                 if ax::mission_control_open(&all) {
                     // Mission Control's business (and real clicks there do not even reach us);
@@ -651,7 +670,26 @@ impl App {
                     if id.is_some() && id != self.active {
                         self.come_to(id, top);
                     }
+                    if let (Some(group), Some(w)) = (id, order.iter().find(|w| w.id == top)) {
+                        self.press = Some(Press {
+                            group,
+                            wid: top,
+                            at: (x, y),
+                            from: w.bounds,
+                            moving: false,
+                            looked: Instant::now(),
+                            over: None,
+                        });
+                    }
                 }
+                Verdict::Pass
+            }
+            6 if self.press.is_some() => {
+                self.drag_tile(x, y);
+                Verdict::Pass
+            }
+            2 if self.press.is_some() => {
+                self.drop_tile(x, y);
                 Verdict::Pass
             }
             6 if self.drag.is_some() => {
@@ -716,6 +754,51 @@ impl App {
         } else if let Some(e) = ax::find_window(pid, wid) {
             e.raise();
         }
+    }
+
+    /// A tile is perhaps being dragged by its title bar: note which tile is under the pointer.
+    fn drag_tile(&mut self, x: f64, y: f64) {
+        let Some(p) = &mut self.press else { return };
+        if !p.moving {
+            // only now and then: this runs for every drag anywhere in a tile
+            if (x - p.at.0).hypot(y - p.at.1) < 12.0 || p.looked.elapsed() < Duration::from_millis(40) {
+                return;
+            }
+            p.looked = Instant::now();
+            let Some(b) = ax::window_order().iter().find(|w| w.id == p.wid).map(|w| w.bounds) else { return };
+            // the window follows the pointer; a resized or still window does not
+            let (dx, dy) = (b.x - p.from.x, b.y - p.from.y);
+            if dx.hypot(dy) < 8.0 || (b.right() - p.from.right()).abs() < 1.0 || (b.bottom() - p.from.bottom()).abs() < 1.0 && dy.abs() > 1.0 {
+                return;
+            }
+            p.moving = true;
+        }
+        let g = self.groups.iter().find(|g| g.id == p.group);
+        p.over = g.and_then(|g| {
+            let frames = g.layout.frames();
+            (0..g.members.len()).find(|&i| !g.layout.is_hidden(i) && frames[i].contains(x, y)).map(|i| g.members[i].wid)
+        });
+        if p.over == Some(p.wid) {
+            p.over = None;
+        }
+    }
+
+    /// Let go: trade places with the tile under the pointer, or go back.
+    fn drop_tile(&mut self, x: f64, y: f64) {
+        self.drag_tile(x, y);
+        let Some(p) = self.press.take().filter(|p| p.moving) else { return };
+        let Some(g) = self.groups.iter_mut().find(|g| g.id == p.group) else { return };
+        if let (Some(i), Some(j)) = (g.has(p.wid), p.over.and_then(|w| g.has(w))) {
+            if g.layout.swap(i, j) {
+                g.members.swap(i, j);
+                g.auto_name();
+            } else {
+                log("no swap: one of them does not fit in the other's place");
+            }
+        }
+        // the app has not seen the release yet and would refuse to be resized
+        g.changed_at = Instant::now();
+        g.settle_at = Some(Instant::now() + Duration::from_millis(110));
     }
 
     /// The user is coming to a group through this window (a tile, or a pane of it).
@@ -943,6 +1026,7 @@ impl App {
             members,
             expected: Vec::new(),
             changed_at: Instant::now(),
+            settle_at: None,
             seam_moved_at: None,
             id: 0,
             stack: Vec::new(),
@@ -999,6 +1083,8 @@ pub struct GroupView {
     pub hot: Option<usize>,
     /// While dragging: the rearmost group window, to put a backdrop behind.
     pub backdrop_below: Option<u32>,
+    /// The tile a dragged one would trade places with.
+    pub drop: Option<Rect>,
 }
 
 pub fn snapshot(mx: f64, my: f64) -> Option<Vec<GroupView>> {
@@ -1014,11 +1100,13 @@ pub fn snapshot(mx: f64, my: f64) -> Option<Vec<GroupView>> {
                 .enumerate()
                 .map(|(gi, g)| {
                     let mine = hot.filter(|h| h.0 == gi).map(|h| h.1);
+                    let over = a.press.as_ref().filter(|p| p.moving && p.group == g.id).and_then(|p| p.over);
+                    let drop = over.and_then(|w| g.has(w)).and_then(|i| g.expected.get(i).copied());
                     let moving = g.seam_moved_at.is_some_and(|t| t.elapsed() < Duration::from_millis(400));
                     let rear = moving
                         .then(|| ax::window_order().iter().rev().find(|w| g.has(w.id).is_some()).map(|w| w.id))
                         .flatten();
-                    GroupView { region: g.layout.region(), seams: g.layout.seams(), hot: mine, backdrop_below: rear }
+                    GroupView { region: g.layout.region(), seams: g.layout.seams(), hot: mine, backdrop_below: rear, drop }
                 })
                 .collect(),
         )
@@ -1268,7 +1356,10 @@ extern "C" fn reapply_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
 extern "C" fn mouse_tap(_proxy: *mut c_void, kind: u32, event: *mut c_void, _info: *mut c_void) -> *mut c_void {
     if kind == 0xFFFF_FFFE || kind == 0xFFFF_FFFF {
         // a mouse-up may have been missed while the tap was off
-        with_try(|a| a.drag = None);
+        with_try(|a| {
+            a.drag = None;
+            a.press = None;
+        });
         ax::reenable_tap();
         return event;
     }
@@ -1302,6 +1393,10 @@ extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
             a.watch_front();
         }
         for g in &mut a.groups {
+            if g.settle_at.is_some_and(|t| t <= Instant::now()) {
+                g.settle_at = None;
+                g.place_smoothly(&ax::window_order(), None);
+            }
             g.step();
         }
         if a.counter % 6 == 0 {

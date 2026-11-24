@@ -269,6 +269,20 @@ impl Layout {
         new
     }
 
+    /// Windows `i` and `j` trade places (the caller swaps its own lists): what is known about
+    /// each travels with it, the splits stay. False, with nothing changed, if they do not fit.
+    pub fn swap(&mut self, i: usize, j: usize) -> bool {
+        let before = self.clone();
+        self.mins.swap(i, j);
+        self.hidden.swap(i, j);
+        self.fit();
+        if !self.fits() {
+            *self = before;
+            return false;
+        }
+        true
+    }
+
     /// Window `i` is gone: its neighbour takes the space.
     pub fn remove(&mut self, i: usize) {
         fn walk(n: Node, i: usize) -> Option<Node> {
@@ -507,6 +521,25 @@ mod tests {
         l.set_hidden(0, true);
         l.drag_seam(0, 400.0);
         assert_eq!(l.frames()[1], r(0.0, 30.0, 1000.0, 370.0));
+    }
+
+    #[test]
+    fn swapping_keeps_the_splits_but_respects_minimums() {
+        let mut l = half_and_stack();
+        let before = l.frames();
+        assert!(l.swap(0, 1));
+        assert_eq!(l.frames(), before);
+        // a window that needs 420 points of height moves the stack's seam
+        l.learn_min(0, false, 420.0);
+        assert!(l.swap(0, 1));
+        assert_eq!(l.frames()[1].h, 420.0);
+        covers(&l);
+        // and one that can never fit in the stack stays where it is
+        l.swap(0, 1);
+        l.learn_min(0, false, 590.0);
+        let before = l.frames();
+        assert!(!l.swap(0, 1));
+        assert_eq!(l.frames(), before);
     }
 
     #[test]
