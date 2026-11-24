@@ -493,6 +493,8 @@ struct Press {
 #[derive(Clone, Copy)]
 struct Join {
     tile: u32,
+    /// Left or above, rather than right or below.
+    before: bool,
     half: Rect,
 }
 
@@ -852,9 +854,13 @@ impl App {
             p.join = g.filter(|_| shift).and_then(|g| {
                 let frames = g.layout.frames();
                 let i = (0..g.members.len()).find(|&i| !g.layout.is_hidden(i) && frames[i].contains(x, y))?;
+                // the half the pointer is in
+                let r = frames[i];
+                let side = r.w >= r.h;
+                let before = if side { x < r.x + r.w / 2.0 } else { y < r.y + r.h / 2.0 };
                 let mut l = g.layout.clone();
-                let new = l.split(i);
-                l.fits().then(|| Join { tile: g.members[i].wid, half: l.frames()[new] })
+                let new = l.insert(i, side, before);
+                l.fits().then(|| Join { tile: g.members[i].wid, before, half: l.frames()[new] })
             });
             return;
         }
@@ -877,7 +883,8 @@ impl App {
             return;
         }
         let mut layout = g.layout.clone();
-        layout.split(i);
+        let r = layout.frames()[i];
+        layout.insert(i, r.w >= r.h, j.before);
         if !layout.fits() {
             log("no join: it does not fit there");
             return;

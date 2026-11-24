@@ -108,10 +108,15 @@ pub fn presets(n: usize) -> Vec<Preset> {
         }
         Preset { main: false, rects: v }
     };
+    // a half, a quarter, and two eighths
+    let halving = || Preset {
+        main: true,
+        rects: vec![r(0.0, 0.0, 0.5, 1.0), r(0.5, 0.0, 0.5, 0.5), r(0.5, 0.5, 0.25, 0.5), r(0.75, 0.5, 0.25, 0.5)],
+    };
     match n {
         2 => vec![columns(), rows()],
         3 => vec![columns(), left(), right(), top(), rows()],
-        4 => vec![grid(), columns(), left(), right(), top()],
+        4 => vec![grid(), left(), halving(), right(), top(), columns()],
         5 | 6 => vec![grid(), left(), right(), columns()],
         _ => Vec::new(),
     }

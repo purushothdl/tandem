@@ -33,7 +33,8 @@ Then:
   anywhere else, or resized by another edge, it glides back.
 - **Change shape**: hover the group in the menu and pick a layout, or step through them with
   Control-Option-L. The app used last takes the big spot.
-- **Drag a pane in**: hold Shift while dragging it onto a tile; they share that tile's space.
+- **Drag a pane in**: hold Shift while dragging it onto a tile; it takes the half of the
+  tile the pointer is in.
 - **Switch**: clicking one window, Cmd-Tab or Mission Control brings its whole group.
 - **Panes**: a smaller window over the group behaves as in plain macOS: clicking a tile puts
   that tile in front of it, clicking the other tile sends it fully behind. If it was in front
