@@ -1003,7 +1003,7 @@ impl App {
         let id = self.groups.iter().find(|g| g.has(top).is_some()).map(|g| g.id);
         let pane = || self.groups.iter().find(|g| g.stack.iter().any(|s| s.1 == top)).map(|g| g.id);
         let id = id.or_else(pane);
-        log(&format!("picked {top} in Mission Control, group {id:?}"));
+        log(&format!("picked {top} in Mission Control, group {id:?}, {}", crate::labels::now_ms()));
         if id.is_some() && !self.verify.is_some_and(|v| v.0 == top) {
             self.come_to(id, top);
         }
@@ -1606,7 +1606,22 @@ extern "C" fn follow_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
     with_try(|a| a.follow());
 }
 
+extern "C" fn press_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
+    crate::labels::drop_on_press();
+}
+
 extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
+    crate::labels::drop_on_press();
+    // before anything that waits for other apps
+    if let Some(mtm) = MainThreadMarker::new() {
+        let screens = NSScreen::screens(mtm);
+        if screens.count() > 0 {
+            let p = NSEvent::mouseLocation();
+            let h = screens.objectAtIndex(0).frame().size.height;
+            crate::overlay::refresh_at(p.x, h - p.y);
+            crate::labels::refresh(mtm, p.x, h - p.y, h);
+        }
+    }
     with_try(|a| {
         a.counter = a.counter.wrapping_add(1);
         a.watch_mission_control();
@@ -1631,19 +1646,11 @@ extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
         }
     });
     finish_card();
-    if let Some(mtm) = MainThreadMarker::new() {
-        let screens = NSScreen::screens(mtm);
-        if screens.count() > 0 {
-            let p = NSEvent::mouseLocation();
-            let h = screens.objectAtIndex(0).frame().size.height;
-            crate::overlay::refresh_at(p.x, h - p.y);
-            crate::labels::refresh(mtm, p.x, h - p.y, h);
-        }
-    }
 }
 
 pub fn start_tracking() {
     schedule(0.1, 0.016, fast_cb);
+    schedule(0.1, 0.004, press_cb);
     let tap = ax::is_trusted(false) && ax::install_click_tap(mouse_tap);
     log(if tap { "tracking started (click tap on)" } else { "tracking started (no click tap; grant Accessibility and reopen)" });
 }

@@ -129,9 +129,28 @@ fn fade(p: &NSPanel, on: bool, now: &mut f64) {
 fn hide(o: &mut Shown) {
     for (p, now) in [(&o.pill, &mut o.pill_on), (&o.ring, &mut o.ring_on)] {
         if *now > 0.0 {
+            p.setAlphaValue(0.0); // at once; taking it off the screen can lag behind
             p.orderOut(None::<&AnyObject>);
             *now = 0.0;
         }
+    }
+}
+
+pub fn now_ms() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() % 100_000)
+}
+
+/// A press usually closes Mission Control: take everything off the screen right away, before
+/// the calls to other apps that bringing up a group takes.
+pub fn drop_on_press() {
+    let up = SHOWN.with(|s| s.borrow().values().any(|o| o.ring_on > 0.0));
+    if !up {
+        return;
+    }
+    if crate::cards::pressed() {
+        app::log(&format!("outlines: gone at the press, {}", now_ms()));
+        SHOWN.with(|s| s.borrow_mut().values_mut().for_each(hide));
+        objc2_quartz_core::CATransaction::flush();
     }
 }
 
@@ -171,6 +190,14 @@ pub fn refresh(mtm: MainThreadMarker, mx: f64, my: f64, screen_h: f64) {
         }
         if MOVED.get().is_none() {
             MOVED.set(Some(Instant::now()));
+        }
+        // moving away: no fade, an outline left behind while its window grows looks stretched
+        if MOVED.get().is_some_and(|t| t.elapsed() < Duration::from_millis(20)) {
+            if s.values().any(|o| o.ring_on > 0.0) {
+                app::log(&format!("outlines: gone as thumbnails moved, {}", now_ms()));
+            }
+            s.values_mut().for_each(hide);
+            objc2_quartz_core::CATransaction::flush();
         }
         let still = MOVED.get().is_none_or(|t| t.elapsed() > STILL);
         // pointing at a group in the bar outlines all of its windows

@@ -232,6 +232,22 @@ fn close(s: &mut State) {
     s.alpha = 0.0;
 }
 
+/// The button went down since the last `refresh`. Takes the bar off the screen; what was
+/// pressed is worked out in `refresh`.
+pub fn pressed() -> bool {
+    STATE.with(|s| {
+        let s = s.borrow();
+        let down = NSEvent::pressedMouseButtons() & 1 != 0;
+        if s.presses == presses() && !(down && !s.down) {
+            return false;
+        }
+        if let Some(b) = s.bars.get(s.which).filter(|_| s.at.is_some()) {
+            b.panel.setAlphaValue(0.0);
+        }
+        true
+    })
+}
+
 /// Mission Control is closed.
 pub fn hide() {
     STATE.with(|s| {
