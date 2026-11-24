@@ -17,11 +17,16 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSCellImagePosition, NSControlStateValueOn, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate,
+    NSApplication, NSBaselineOffsetAttributeName, NSCellImagePosition, NSColor, NSControlStateValueOn,
+    NSEventModifierFlags, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSImage, NSMenu, NSMenuDelegate,
     NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength, NSWorkspace,
 };
-use objc2_foundation::{NSSize, NSString, NSURL};
+use objc2_foundation::{NSMutableAttributedString, NSNumber, NSRange, NSSize, NSString, NSURL};
 use std::cell::RefCell;
+
+/// The dot's font size, and how far it is raised to the middle of the icon.
+const DOT: f64 = 7.0;
+const DOT_UP: f64 = 2.0;
 
 pub struct Ivars {
     button: Retained<NSStatusBarButton>,
@@ -149,20 +154,21 @@ impl Handler {
         self.show_status();
     }
 
-    /// The text beside the icon: a dot while there are groups, a square in full screen.
+    /// A small green dot beside the icon while there are groups.
     fn show_status(&self) {
         let button = &self.ivars().button;
-        let s = views::status();
-        let mark = if s.full {
-            " ▣"
-        } else if s.any {
-            " ●"
-        } else {
-            ""
-        };
         // without the icon (run outside the bundle) a glyph stands in for it
         let icon = if button.image().is_some() { "" } else { "▥" };
-        button.setTitle(&NSString::from_str(&format!("{icon}{mark}")));
+        let dot = if views::any_groups() { " ●" } else { "" };
+        let title = NSMutableAttributedString::from_nsstring(&NSString::from_str(&format!("{icon}{dot}")));
+        let range = NSRange::new(icon.encode_utf16().count(), dot.encode_utf16().count());
+        // SAFETY: each value is of the type its attribute expects, the range is inside the text.
+        unsafe {
+            title.addAttribute_value_range(NSFontAttributeName, &NSFont::systemFontOfSize(DOT), range);
+            title.addAttribute_value_range(NSForegroundColorAttributeName, &NSColor::systemGreenColor(), range);
+            title.addAttribute_value_range(NSBaselineOffsetAttributeName, &NSNumber::new_f64(DOT_UP), range);
+        }
+        button.setAttributedTitle(&title);
     }
 
     fn fill(&self, menu: &NSMenu) {

@@ -32,14 +32,8 @@ pub fn pids_of(id: GroupId) -> Vec<i32> {
     with(|a| a.group(id).map_or(Vec::new(), |g| g.members.iter().map(|m| m.pid).collect()))
 }
 
-/// For the menu bar.
-pub struct Status {
-    pub any: bool,
-    pub full: bool,
-}
-
-pub fn status() -> Status {
-    with(|a| Status { any: !a.groups.is_empty(), full: a.groups.iter().any(|g| g.full) })
+pub fn any_groups() -> bool {
+    with(|a| !a.groups.is_empty())
 }
 
 // ---- over the windows ----
