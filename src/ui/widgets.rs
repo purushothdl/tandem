@@ -93,7 +93,7 @@ define_class!(
     // A thin, pale bar instead of the thick round one.
     #[unsafe(super(NSScroller))]
     #[thread_kind = MainThreadOnly]
-    #[name = "WGSlimScroller"]
+    #[name = "TandemSlimScroller"]
     pub struct SlimScroller;
 
     impl SlimScroller {

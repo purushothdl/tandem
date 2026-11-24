@@ -46,7 +46,7 @@ define_class!(
     // One layout, drawn small. Click to use it.
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "WGLayoutThumb"]
+    #[name = "TandemLayoutThumb"]
     #[ivars = ThumbIvars]
     struct LayoutThumb;
 

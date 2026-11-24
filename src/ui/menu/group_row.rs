@@ -32,7 +32,7 @@ define_class!(
     // A group in the menu: click to switch.
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "WGGroupRow"]
+    #[name = "TandemGroupRow"]
     #[ivars = GroupRowIvars]
     pub struct GroupRow;
 

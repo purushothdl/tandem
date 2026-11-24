@@ -3,7 +3,16 @@
 A macOS menu-bar app that keeps windows together. Put two to six windows side by side, tile
 them, and they resize, switch and go full screen as one.
 
-Written in Rust. No dependencies beyond bindings to macOS.
+<img src="resources/icon.png" width="128" alt="Tandem icon">
+
+Written in Rust, with no dependencies beyond bindings to macOS. What was interesting about it:
+
+- **Control without ownership.** Other apps own their windows, and can be slow, refuse or hang.
+  Each window gets a thread that skips to the newest target, reads back, and retries.
+- **No macOS API for half of it.** Picks in Mission Control, stacking across apps and real
+  minimum sizes are worked out from what can be observed.
+- **Decisions kept pure.** Layout, gestures and timing take their inputs as arguments, the
+  clock included, so they are tested without a window in sight.
 
 ## Build and run
 

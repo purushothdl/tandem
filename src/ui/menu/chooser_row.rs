@@ -25,7 +25,7 @@ define_class!(
     // A window to tick.
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "WGRow"]
+    #[name = "TandemRow"]
     #[ivars = RowIvars]
     pub struct Row;
 

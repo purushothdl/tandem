@@ -15,7 +15,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>dev.local.wingroup</string>
+  <key>CFBundleIdentifier</key><string>dev.local.tandem</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleName</key><string>Tandem</string>
   <key>CFBundleExecutable</key><string>tandem</string>
@@ -25,11 +25,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSAppleEventsUsageDescription</key><string>Tandem hides the Dock in full mode.</string>
 </dict></plist>
 PLIST
-# The id predates the name; keeping it keeps the permission.
 # Pin the designated requirement to the bundle id. Ad-hoc signing alone pins it
 # to the code hash, which changes on every build and makes macOS forget the
 # Accessibility grant each time.
-codesign --force --sign - -r='designated => identifier "dev.local.wingroup"' "$APP"
+codesign --force --sign - -r='designated => identifier "dev.local.tandem"' "$APP"
 echo "Built $APP"
 if [ "$1" = install ]; then
   pkill -x tandem || true

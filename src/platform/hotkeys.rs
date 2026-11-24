@@ -71,7 +71,7 @@ pub fn install(shortcuts: &[(u32, fn())]) {
         let ty = EventType { class: four(b"keyb"), kind: KEY_PRESSED };
         InstallEventHandler(target, pressed, 1, &ty, std::ptr::null_mut(), std::ptr::null_mut());
         for (i, (code, _)) in shortcuts.iter().enumerate() {
-            let id = HotKeyId { signature: four(b"wgrp"), id: i as u32 };
+            let id = HotKeyId { signature: four(b"tndm"), id: i as u32 };
             let mut out = std::ptr::null_mut();
             if RegisterEventHotKey(*code, CONTROL | OPTION, id, target, 0, &mut out) != 0 {
                 log(&format!("shortcut {i} is taken by another app"));

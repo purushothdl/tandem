@@ -40,7 +40,7 @@ pub struct Ivars {
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "WGHandler"]
+    #[name = "TandemHandler"]
     #[ivars = Ivars]
     pub struct Handler;
 
