@@ -95,6 +95,8 @@ struct App {
     front_pid: i32,
     /// A press on a tile that may become a title-bar drag.
     press: Option<Press>,
+    /// A dropped pane about to join: when, group, pid, window, where it was before the drag.
+    joining: Option<(Instant, u32, i32, u32, Rect, Join)>,
     /// In Mission Control: what was on top when it opened (pid, window id).
     mc_origin: Option<(i32, u32)>,
     /// The window being hovered there, and since when.
@@ -121,6 +123,7 @@ thread_local! {
         mc_top: 0,
         front_pid: 0,
         press: None,
+        joining: None,
         mc_origin: None,
         mc_hover: None,
         prepared: None,
@@ -443,6 +446,19 @@ struct Press {
     looked: Instant,
     /// The tile it would trade places with.
     over: Option<u32>,
+    /// Not in a group: with Control held it joins this one.
+    pid: i32,
+    pane: bool,
+    join: Option<Join>,
+}
+
+/// Where a dragged pane would go: half of a tile.
+#[derive(Clone, Copy)]
+struct Join {
+    tile: u32,
+    side: bool,
+    before: bool,
+    half: Rect,
 }
 
 enum Verdict {
@@ -630,7 +646,7 @@ impl App {
         }
     }
 
-    fn mouse(&mut self, kind: u32, x: f64, y: f64, clicks: i64) -> Verdict {
+    fn mouse(&mut self, kind: u32, x: f64, y: f64, clicks: i64, control: bool) -> Verdict {
         match kind {
             1 => {
                 self.drag = None;
@@ -670,7 +686,10 @@ impl App {
                     if id.is_some() && id != self.active {
                         self.come_to(id, top);
                     }
-                    if let (Some(group), Some(w)) = (id, order.iter().find(|w| w.id == top)) {
+                    // a window of no group may be dragged into the one in use
+                    let pane = id.is_none();
+                    let group = id.or(self.active);
+                    if let (Some(group), Some(w)) = (group, order.iter().find(|w| w.id == top)) {
                         self.press = Some(Press {
                             group,
                             wid: top,
@@ -679,17 +698,20 @@ impl App {
                             moving: false,
                             looked: Instant::now(),
                             over: None,
+                            pid: w.pid,
+                            pane,
+                            join: None,
                         });
                     }
                 }
                 Verdict::Pass
             }
             6 if self.press.is_some() => {
-                self.drag_tile(x, y);
+                self.drag_tile(x, y, control);
                 Verdict::Pass
             }
             2 if self.press.is_some() => {
-                self.drop_tile(x, y);
+                self.drop_tile(x, y, control);
                 Verdict::Pass
             }
             6 if self.drag.is_some() => {
@@ -757,7 +779,7 @@ impl App {
     }
 
     /// A tile is perhaps being dragged by its title bar: note which tile is under the pointer.
-    fn drag_tile(&mut self, x: f64, y: f64) {
+    fn drag_tile(&mut self, x: f64, y: f64, control: bool) {
         let Some(p) = &mut self.press else { return };
         if !p.moving {
             // only now and then: this runs for every drag anywhere in a tile
@@ -774,6 +796,21 @@ impl App {
             p.moving = true;
         }
         let g = self.groups.iter().find(|g| g.id == p.group);
+        if p.pane {
+            p.join = g.filter(|_| control).and_then(|g| {
+                let frames = g.layout.frames();
+                let i = (0..g.members.len()).find(|&i| !g.layout.is_hidden(i) && frames[i].contains(x, y))?;
+                let r = frames[i];
+                // the half at the nearest edge
+                let (fx, fy) = ((x - r.x) / r.w, (y - r.y) / r.h);
+                let edges = [(fx, true, true), (1.0 - fx, true, false), (fy, false, true), (1.0 - fy, false, false)];
+                let (_, side, before) = edges.into_iter().min_by(|a, b| a.0.total_cmp(&b.0))?;
+                let (w, h) = if side { (r.w / 2.0, r.h) } else { (r.w, r.h / 2.0) };
+                let (x, y) = if before { (r.x, r.y) } else { (r.right() - w, r.bottom() - h) };
+                Some(Join { tile: g.members[i].wid, side, before, half: Rect { x, y, w, h } })
+            });
+            return;
+        }
         p.over = g.and_then(|g| {
             let frames = g.layout.frames();
             (0..g.members.len()).find(|&i| !g.layout.is_hidden(i) && frames[i].contains(x, y)).map(|i| g.members[i].wid)
@@ -783,10 +820,48 @@ impl App {
         }
     }
 
+    /// A pane was dropped on a tile with Control held.
+    fn join(&mut self) {
+        let Some((_, id, pid, wid, from, j)) = self.joining.take_if(|j| j.0 <= Instant::now()) else { return };
+        let Some(g) = self.groups.iter().find(|g| g.id == id) else { return };
+        let Some(i) = g.has(j.tile) else { return };
+        if g.members.len() >= MAX_TILES {
+            log("no join: the group is full");
+            return;
+        }
+        let mut layout = g.layout.clone();
+        layout.insert(i, j.side, j.before);
+        if !layout.fits() {
+            log("no join: it does not fit there");
+            return;
+        }
+        let Some(mut m) = Member::open(pid, wid) else { return };
+        m.home = Some(from); // where it was before it was dragged here
+        self.subscribe(pid, &m.elem);
+        for g in &mut self.groups {
+            g.panes.retain(|p| *p != wid);
+            g.stack.retain(|s| s.1 != wid);
+        }
+        let Some(g) = self.groups.iter_mut().find(|g| g.id == id) else { return };
+        g.layout = layout;
+        g.members.push(m);
+        g.used = wid;
+        g.auto_name();
+        g.place_smoothly(&ax::window_order(), None);
+        self.come_to(Some(id), wid);
+    }
+
     /// Let go: trade places with the tile under the pointer, or go back.
-    fn drop_tile(&mut self, x: f64, y: f64) {
-        self.drag_tile(x, y);
+    fn drop_tile(&mut self, x: f64, y: f64, control: bool) {
+        self.drag_tile(x, y, control);
         let Some(p) = self.press.take().filter(|p| p.moving) else { return };
+        if p.pane {
+            if let Some(j) = p.join {
+                // once the app has seen the release
+                self.joining = Some((Instant::now() + Duration::from_millis(110), p.group, p.pid, p.wid, p.from, j));
+            }
+            return;
+        }
         let Some(g) = self.groups.iter_mut().find(|g| g.id == p.group) else { return };
         if let (Some(i), Some(j)) = (g.has(p.wid), p.over.and_then(|w| g.has(w))) {
             if g.layout.swap(i, j) {
@@ -1101,7 +1176,8 @@ pub fn snapshot(mx: f64, my: f64) -> Option<Vec<GroupView>> {
                 .map(|(gi, g)| {
                     let mine = hot.filter(|h| h.0 == gi).map(|h| h.1);
                     let over = a.press.as_ref().filter(|p| p.moving && p.group == g.id).and_then(|p| p.over);
-                    let drop = over.and_then(|w| g.has(w)).and_then(|i| g.expected.get(i).copied());
+                    let join = a.press.as_ref().filter(|p| p.moving && p.group == g.id).and_then(|p| p.join).map(|j| j.half);
+                    let drop = join.or(over.and_then(|w| g.has(w)).and_then(|i| g.expected.get(i).copied()));
                     let moving = g.seam_moved_at.is_some_and(|t| t.elapsed() < Duration::from_millis(400));
                     let rear = moving
                         .then(|| ax::window_order().iter().rev().find(|w| g.has(w.id).is_some()).map(|w| w.id))
@@ -1365,7 +1441,8 @@ extern "C" fn mouse_tap(_proxy: *mut c_void, kind: u32, event: *mut c_void, _inf
     }
     let (x, y) = ax::event_location(event);
     let clicks = ax::click_count(event);
-    match with_try(|a| a.mouse(kind, x, y, clicks)).unwrap_or(Verdict::Pass) {
+    let control = ax::control_held(event);
+    match with_try(|a| a.mouse(kind, x, y, clicks, control)).unwrap_or(Verdict::Pass) {
         Verdict::Swallow => {
             crate::overlay::refresh_at(x, y); // the bar moves with the pointer, not a timer later
             return std::ptr::null_mut();
@@ -1392,6 +1469,7 @@ extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
         if a.counter % 2 == 0 {
             a.watch_front();
         }
+        a.join();
         for g in &mut a.groups {
             if g.settle_at.is_some_and(|t| t <= Instant::now()) {
                 g.settle_at = None;

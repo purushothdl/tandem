@@ -246,25 +246,30 @@ impl Layout {
 
     /// A new window takes half of tile `i`, along its longer side. Returns its index.
     pub fn split(&mut self, i: usize) -> usize {
-        fn walk(n: &mut Node, i: usize, r: Rect, new: usize) -> bool {
+        let r = self.frames()[i];
+        self.insert(i, r.w >= r.h, false)
+    }
+
+    /// A new window takes half of tile `i`: `side` by side or stacked, `before` (left or
+    /// above) or after it. Returns its index.
+    pub fn insert(&mut self, i: usize, side: bool, before: bool) -> usize {
+        fn walk(n: &mut Node, i: usize, cut: (bool, f64), before: bool, new: usize) -> bool {
             match n {
                 Node::Leaf(j) if *j == i => {
-                    let side = r.w >= r.h;
-                    let at = ((r.lo(side) + r.hi(side)) / 2.0).round();
-                    *n = Node::Split { side, at, a: Box::new(Node::Leaf(i)), b: Box::new(Node::Leaf(new)) };
+                    let (a, b) = if before { (new, i) } else { (i, new) };
+                    *n = Node::Split { side: cut.0, at: cut.1, a: Box::new(Node::Leaf(a)), b: Box::new(Node::Leaf(b)) };
                     true
                 }
                 Node::Leaf(_) => false,
-                Node::Split { side, at, a, b } => {
-                    let (ra, rb) = r.cut(*side, *at);
-                    walk(a, i, ra, new) || walk(b, i, rb, new)
-                }
+                Node::Split { a, b, .. } => walk(a, i, cut, before, new) || walk(b, i, cut, before, new),
             }
         }
+        let r = self.frames()[i];
+        let at = ((r.lo(side) + r.hi(side)) / 2.0).round();
         let new = self.mins.len();
         self.mins.push((MIN_W, MIN_H));
         self.hidden.push(false);
-        walk(&mut self.root, i, self.region, new);
+        walk(&mut self.root, i, (side, at), before, new);
         self.fit();
         new
     }
@@ -540,6 +545,22 @@ mod tests {
         let before = l.frames();
         assert!(!l.swap(0, 1));
         assert_eq!(l.frames(), before);
+    }
+
+    #[test]
+    fn inserting_on_each_edge() {
+        for (side, before, want) in [
+            (true, true, r(500.0, 30.0, 250.0, 600.0)),
+            (true, false, r(750.0, 30.0, 250.0, 600.0)),
+            (false, true, r(500.0, 30.0, 500.0, 300.0)),
+            (false, false, r(500.0, 330.0, 500.0, 300.0)),
+        ] {
+            let mut l = two();
+            let i = l.insert(1, side, before);
+            assert_eq!(l.frames()[i], want);
+            assert_eq!(l.frames()[0], r(0.0, 30.0, 500.0, 600.0));
+            covers(&l);
+        }
     }
 
     #[test]

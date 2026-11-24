@@ -31,6 +31,8 @@ Then:
   minimum size. Double-click it to even the split.
 - **Swap**: drag a tile by its title bar onto another tile and they trade places. Dropped
   anywhere else, or resized by another edge, it glides back.
+- **Drag a pane in**: start dragging it by its title bar, then hold Control. The highlight shows
+  the half of a tile it will take.
 - **Switch**: clicking one window, Cmd-Tab or Mission Control brings its whole group.
 - **Panes**: a smaller window over the group behaves as in plain macOS: clicking a tile puts
   that tile in front of it, clicking the other tile sends it fully behind. If it was in front

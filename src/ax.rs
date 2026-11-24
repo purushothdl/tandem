@@ -73,6 +73,7 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn CGEventTapEnable(tap: *mut c_void, enable: bool);
     fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
+    fn CGEventGetFlags(event: *mut c_void) -> u64;
     fn CGEventGetIntegerValueField(event: *mut c_void, field: u32) -> i64;
 }
 
@@ -111,6 +112,10 @@ pub fn reenable_tap() {
 pub fn event_location(event: *mut c_void) -> (f64, f64) {
     let p = unsafe { CGEventGetLocation(event) };
     (p.x, p.y)
+}
+
+pub fn control_held(event: *mut c_void) -> bool {
+    unsafe { CGEventGetFlags(event) & (1 << 18) != 0 }
 }
 
 pub fn click_count(event: *mut c_void) -> i64 {
