@@ -8,7 +8,7 @@ use objc2::runtime::AnyObject;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSFloatingWindowLevel, NSNormalWindowLevel, NSPanel, NSScreen,
-    NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
+    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use std::cell::RefCell;
@@ -29,6 +29,7 @@ fn panel(mtm: MainThreadMarker, rect: NSRect) -> Retained<NSPanel> {
     p.setHasShadow(false);
     p.setLevel(NSFloatingWindowLevel);
     p.setIgnoresMouseEvents(true);
+    p.setAnimationBehavior(NSWindowAnimationBehavior::None);
     p.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::Stationary

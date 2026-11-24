@@ -8,7 +8,7 @@ use objc2::runtime::AnyObject;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSFont, NSImageView, NSPanel, NSRunningApplication, NSScreenSaverWindowLevel, NSTextField,
-    NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 const H: f64 = 30.0;
 const ICON: f64 = 20.0;
+const RING: f64 = 4.0;
 
 struct Shown {
     pill: Retained<NSPanel>,
@@ -23,6 +24,9 @@ struct Shown {
     name: String,
     at: Rect,
     pill_on: bool,
+    /// Outline for when another window of the group is being pointed at.
+    ring: Retained<NSPanel>,
+    ring_on: bool,
 }
 
 thread_local! {
@@ -47,6 +51,7 @@ fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
     p.setHasShadow(false);
     p.setLevel(NSScreenSaverWindowLevel);
     p.setIgnoresMouseEvents(true);
+    p.setAnimationBehavior(NSWindowAnimationBehavior::None); // appear at once, no pop-in
     p.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::Stationary
@@ -89,7 +94,18 @@ fn build(mtm: MainThreadMarker, l: &Label) -> Shown {
     let pill = panel(mtm);
     pill.setContentView(Some(&view));
 
-    Shown { pill, width, name: l.name.clone(), at: Rect::default(), pill_on: false }
+    let ring = panel(mtm);
+    // above the thumbnails, below the app icons Mission Control draws on layer 17
+    ring.setLevel(16);
+    let rv = NSView::initWithFrame(mtm.alloc(), rect(0.0, 0.0, 10.0, 10.0));
+    rv.setWantsLayer(true);
+    if let Some(layer) = rv.layer() {
+        layer.setBorderWidth(RING);
+        layer.setCornerRadius(12.0);
+        layer.setBorderColor(Some(&NSColor::controlAccentColor().CGColor()));
+    }
+    ring.setContentView(Some(&rv));
+    Shown { pill, width, name: l.name.clone(), at: Rect::default(), pill_on: false, ring, ring_on: false }
 }
 
 fn set(p: &NSPanel, on: bool, was: &mut bool) {
@@ -101,20 +117,25 @@ fn set(p: &NSPanel, on: bool, was: &mut bool) {
     *was = on;
 }
 
-/// `screen_h`: height of the primary display.
-pub fn refresh(mtm: MainThreadMarker, screen_h: f64) {
-    let Some(labels) = app::mission_control_labels() else { return };
+/// `mx`, `my`: the pointer; `screen_h`: height of the primary display.
+pub fn refresh(mtm: MainThreadMarker, mx: f64, my: f64, screen_h: f64) {
+    let Some(labels) = app::mission_control_labels(mx, my) else { return };
     SHOWN.with(|s| {
         let mut s = s.borrow_mut();
         if labels.is_empty() {
             for (_, mut o) in s.drain() {
                 set(&o.pill, false, &mut o.pill_on);
+                set(&o.ring, false, &mut o.ring_on);
             }
             return;
         }
+        let hovered = labels.iter().find(|l| l.hovered).map(|l| (l.group, l.wid));
         for l in &labels {
             if s.get(&l.wid).is_none_or(|o| o.name != l.name) {
-                s.insert(l.wid, build(mtm, l));
+                if let Some(mut old) = s.insert(l.wid, build(mtm, l)) {
+                    set(&old.pill, false, &mut old.pill_on);
+                    set(&old.ring, false, &mut old.ring_on);
+                }
             }
             let Some(o) = s.get_mut(&l.wid) else { continue };
             // wait until the thumbnail has stopped moving
@@ -123,8 +144,13 @@ pub fn refresh(mtm: MainThreadMarker, screen_h: f64) {
                 o.at = l.at;
                 let y = l.at.y + 10.0;
                 o.pill.setFrame_display(rect(l.at.x + (l.at.w - o.width) / 2.0, screen_h - y - H, o.width, H), true);
+                let r = Rect { x: l.at.x - RING, y: l.at.y - RING, w: l.at.w + 2.0 * RING, h: l.at.h + 2.0 * RING };
+                o.ring.setFrame_display(rect(r.x, screen_h - r.bottom(), r.w, r.h), true);
             }
             set(&o.pill, settled, &mut o.pill_on);
+            // macOS outlines the one under the pointer itself; its partners are ours
+            let partner = hovered.is_some_and(|(g, wid)| g == l.group && wid != l.wid);
+            set(&o.ring, settled && partner, &mut o.ring_on);
         }
     });
 }

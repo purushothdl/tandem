@@ -368,6 +368,10 @@ impl App {
 
     /// The seam under a point, if nothing else is in front of it there.
     fn seam_at(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        // nothing behind one of our own dialogs reacts
+        if MODAL.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
         // several groups can have a seam at the same place; the one on top wins below
         let hits: Vec<(usize, usize)> = self
             .groups
@@ -714,6 +718,9 @@ pub fn snapshot(mx: f64, my: f64) -> Option<Vec<GroupView>> {
 
 // ---- actions called from the menu ----
 
+/// One of our dialogs is open.
+pub static MODAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Set once the menu-bar icon image loaded; without it the title carries a text glyph.
 pub static HAS_ICON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -959,7 +966,7 @@ extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
             let p = NSEvent::mouseLocation();
             let h = screens.objectAtIndex(0).frame().size.height;
             crate::overlay::refresh_at(p.x, h - p.y);
-            crate::labels::refresh(mtm, h);
+            crate::labels::refresh(mtm, p.x, h - p.y, h);
         }
     }
 }
@@ -975,6 +982,10 @@ pub fn start_tracking() {
 /// The group in use and its current name.
 pub fn name_of(id: u32) -> Option<String> {
     with(|a| a.groups.iter().find(|g| g.id == id).map(|g| g.name.clone()))
+}
+
+pub fn tiles_of(id: u32) -> Vec<Tile> {
+    with(|a| a.groups.iter().filter(|g| g.id == id).flat_map(|g| &g.members).map(|m| Tile { pid: m.pid }).collect())
 }
 
 pub fn rename(id: u32, name: &str) -> String {
@@ -1066,6 +1077,9 @@ pub fn menu_model() -> MenuModel {
 
 pub struct Label {
     pub wid: u32,
+    pub group: u32,
+    /// The pointer is on it.
+    pub hovered: bool,
     /// The window's thumbnail.
     pub at: Rect,
     pub name: String,
@@ -1073,7 +1087,7 @@ pub struct Label {
 }
 
 /// While Mission Control is open: one label per grouped window on screen.
-pub fn mission_control_labels() -> Option<Vec<Label>> {
+pub fn mission_control_labels(mx: f64, my: f64) -> Option<Vec<Label>> {
     with_try(|a| {
         // the tick notices Mission Control; only look closely around then
         if a.groups.is_empty() || !a.mc_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(250)) {
@@ -1083,13 +1097,15 @@ pub fn mission_control_labels() -> Option<Vec<Label>> {
         if !ax::mission_control_open(&all) || a.verify.is_some() || a.mc_pick.is_some() {
             return Some(Vec::new());
         }
+        // thumbnails of one app overlap, so only the topmost under the pointer counts
+        let top = on_top_at(&ax::normal(&all), mx, my).map(|w| w.id);
         let mut out = Vec::new();
         for g in &a.groups {
             let mut pids: Vec<i32> = g.members.iter().map(|m| m.pid).collect();
             pids.dedup();
             for m in &g.members {
                 if let Some(w) = all.iter().find(|w| w.id == m.wid) {
-                    out.push(Label { wid: m.wid, at: w.bounds, name: g.name.clone(), pids: pids.clone() });
+                    out.push(Label { wid: m.wid, at: w.bounds, hovered: top == Some(w.id), group: g.id, name: g.name.clone(), pids: pids.clone() });
                 }
             }
         }

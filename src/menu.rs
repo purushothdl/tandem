@@ -5,14 +5,21 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, Sel};
 use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, Message, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSBackingStoreType, NSButton, NSColor, NSControlSize,
+    NSApplication, NSBackingStoreType, NSButton, NSColor, NSControlSize,
     NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSFloatingWindowLevel, NSFont, NSImage,
-    NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSRunningApplication, NSScrollView,
-    NSStatusBarButton, NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
+    NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSRunningApplication, NSScrollView,
+    NSStatusBarButton, NSTextField, NSTextFieldBezelStyle, NSTrackingArea, NSTrackingAreaOptions, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURL};
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::Ordering;
+
+struct Renamer {
+    panel: Retained<NSPanel>,
+    field: Retained<NSTextField>,
+    id: u32,
+}
 
 struct Chooser {
     panel: Retained<NSPanel>,
@@ -24,6 +31,7 @@ pub struct Ivars {
     button: Retained<NSStatusBarButton>,
     /// The "Choose Windows" window: each row's checkbox with its (pid, window id).
     chooser: RefCell<Option<Chooser>>,
+    renamer: RefCell<Option<Renamer>>,
     /// The last thing that went wrong, shown once.
     note: RefCell<Option<String>>,
 }
@@ -71,27 +79,29 @@ define_class!(
         }
         #[unsafe(method(rename:))]
         fn rename(&self, i: &NSMenuItem) {
-            let id = i.tag() as u32;
-            if let Some(name) = app::name_of(id).and_then(|now| ask_name(self.mtm(), &now)) {
-                self.say(app::rename(id, &name));
-            }
+            self.show_renamer(i.tag() as u32);
         }
         #[unsafe(method(openChooser:))]
         fn open_chooser(&self, _s: Option<&AnyObject>) {
             self.show_chooser();
         }
-        #[unsafe(method(cancelChooser:))]
-        fn cancel_chooser(&self, _s: Option<&AnyObject>) {
-            if let Some(c) = self.ivars().chooser.take() {
-                c.panel.close();
-            }
+        #[unsafe(method(cancelDialog:))]
+        fn cancel_dialog(&self, _s: Option<&AnyObject>) {
+            self.close_dialogs();
         }
         #[unsafe(method(tileChosen:))]
         fn tile_chosen(&self, _s: Option<&AnyObject>) {
-            let Some(c) = self.ivars().chooser.take() else { return };
-            let picks: Vec<(i32, u32)> = ticked_rows(&c);
-            c.panel.close();
+            let picks = self.ivars().chooser.borrow().as_ref().map(ticked_rows).unwrap_or_default();
+            self.close_dialogs();
             self.say(app::tile_chosen(&picks));
+        }
+        #[unsafe(method(renameDone:))]
+        fn rename_done(&self, _s: Option<&AnyObject>) {
+            let new = self.ivars().renamer.borrow().as_ref().map(|r| (r.id, r.field.stringValue().to_string()));
+            self.close_dialogs();
+            if let Some((id, name)) = new {
+                self.say(app::rename(id, &name));
+            }
         }
         #[unsafe(method(openPrivacy:))]
         fn open_privacy(&self, _s: Option<&AnyObject>) {
@@ -113,6 +123,7 @@ impl Handler {
         let this = Self::alloc(mtm).set_ivars(Ivars {
             button,
             chooser: RefCell::default(),
+            renamer: RefCell::default(),
             note: RefCell::default(),
         });
         unsafe { msg_send![super(this), init] }
@@ -177,52 +188,90 @@ impl Handler {
         menu.addItem(&self.item("Quit wingroup", "power", Some(sel!(quit:)), 0));
     }
 
-    /// A window that stays open: pick rows, then Tile.
-    fn show_chooser(&self) {
-        let mtm = self.mtm();
+    fn close_dialogs(&self) {
         if let Some(c) = self.ivars().chooser.take() {
             c.panel.close();
         }
-        let windows = app::menu_model().windows;
-        const ROW: f64 = 52.0;
-        const W: f64 = 400.0;
-        const HEAD: f64 = 78.0;
-        const FOOT: f64 = 64.0;
-        let content_h = windows.len().max(1) as f64 * ROW;
-        let list_h = content_h.min(7.0 * ROW);
-        let h = HEAD + list_h + FOOT;
+        if let Some(r) = self.ivars().renamer.take() {
+            r.panel.close();
+        }
+        app::MODAL.store(false, Ordering::Relaxed);
+    }
+
+    /// The shared look of our dialogs: frosted, big title, quiet line under it, buttons below.
+    /// Returns the panel, its content view and the default button.
+    fn dialog(&self, w: f64, h: f64, title: &str, hint: &str, ok: &str, action: Sel) -> Dialog {
+        self.close_dialogs();
+        let mtm = self.mtm();
         let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
             mtm.alloc(),
-            frame(0.0, 0.0, W, h),
-            NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::FullSizeContentView,
+            frame(0.0, 0.0, w, h),
+            NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView,
             NSBackingStoreType::Buffered,
             false,
         );
         unsafe { panel.setReleasedWhenClosed(false) };
-        panel.setTitle(&NSString::from_str("Choose Windows"));
+        panel.setTitle(&NSString::from_str(title));
         panel.setTitleVisibility(NSWindowTitleVisibility::Hidden);
         panel.setTitlebarAppearsTransparent(true);
         panel.setMovableByWindowBackground(true);
         panel.setLevel(NSFloatingWindowLevel);
         panel.setHidesOnDeactivate(false);
+        for b in [NSWindowButton::CloseButton, NSWindowButton::MiniaturizeButton, NSWindowButton::ZoomButton] {
+            if let Some(b) = panel.standardWindowButton(b) {
+                b.setHidden(true);
+            }
+        }
 
-        // the same frosted background as system panels
-        let view = NSVisualEffectView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, W, h));
+        let view = NSVisualEffectView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, w, h));
         view.setMaterial(NSVisualEffectMaterial::Popover);
         view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
         view.setState(NSVisualEffectState::Active);
 
-        let title = label(mtm, "Choose Windows", 17.0, true, false);
-        title.setFrame(frame(24.0, h - 52.0, W - 48.0, 22.0));
-        view.addSubview(&title);
-        let hint = label(mtm, "Select two or more to tile together", 12.0, false, true);
-        hint.setFrame(frame(24.0, h - 72.0, W - 48.0, 16.0));
-        view.addSubview(&hint);
+        let t = label(mtm, title, 22.0, true, false);
+        t.setFrame(frame(MARGIN, h - 32.0 - 28.0, w - 2.0 * MARGIN, 28.0));
+        view.addSubview(&t);
+        let l = label(mtm, hint, 13.0, false, true);
+        l.setFrame(frame(MARGIN, h - 32.0 - 28.0 - 6.0 - 18.0, w - 2.0 * MARGIN, 18.0));
+        view.addSubview(&l);
+
+        let button = |t: &str, action: Sel, key: &str, x: f64, bw: f64| {
+            let b = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str(t), Some(self), Some(action), mtm) };
+            b.setControlSize(NSControlSize::Large);
+            b.setFrame(frame(x, 22.0, bw, 34.0));
+            b.setKeyEquivalent(&NSString::from_str(key));
+            view.addSubview(&b);
+            b
+        };
+        button("Cancel", sel!(cancelDialog:), "\u{1b}", w - MARGIN - 150.0 - 10.0 - 100.0, 100.0);
+        let ok = button(ok, action, "\r", w - MARGIN - 150.0, 150.0);
+        Dialog { panel, view, ok }
+    }
+
+    fn open(&self, d: &Dialog) {
+        d.panel.setContentView(Some(&d.view));
+        d.panel.center();
+        app::MODAL.store(true, Ordering::Relaxed);
+        NSApplication::sharedApplication(self.mtm()).activate();
+        d.panel.makeKeyAndOrderFront(None);
+    }
+
+    /// Stays open: pick rows, then Tile.
+    fn show_chooser(&self) {
+        let mtm = self.mtm();
+        let windows = app::menu_model().windows;
+        const ROW: f64 = 64.0;
+        const W: f64 = 480.0;
+        let content_h = windows.len().max(1) as f64 * ROW;
+        let list_h = content_h.min(6.5 * ROW);
+        let h = HEAD + list_h + FOOT;
+        let d = self.dialog(W, h, "Choose Windows", "Select two or more windows to tile together.", "Tile", sel!(tileChosen:));
 
         let list = NSView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, W, content_h));
         let mut rows = Vec::new();
         for (i, w) in windows.iter().enumerate() {
-            let r = Row::new(mtm, frame(12.0, content_h - (i as f64 + 1.0) * ROW + 2.0, W - 24.0, ROW - 4.0), w, self);
+            let y = content_h - (i as f64 + 1.0) * ROW + 2.0;
+            let r = Row::new(mtm, frame(MARGIN - 12.0, y, W - 2.0 * (MARGIN - 12.0), ROW - 4.0), w, self);
             list.addSubview(&r);
             rows.push(r);
         }
@@ -233,25 +282,33 @@ impl Handler {
         scroll.setDocumentView(Some(&list));
         // start at the top of the list
         list.scrollPoint(NSPoint::new(0.0, content_h));
-        view.addSubview(&scroll);
+        d.view.addSubview(&scroll);
 
-        let button = |t: &str, action: Sel, key: &str, x: f64, w: f64| {
-            let b = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str(t), Some(self), Some(action), mtm) };
-            b.setControlSize(NSControlSize::Large);
-            b.setFrame(frame(x, 16.0, w, 32.0));
-            b.setKeyEquivalent(&NSString::from_str(key));
-            view.addSubview(&b);
-            b
-        };
-        button("Cancel", sel!(cancelChooser:), "\u{1b}", W - 250.0, 90.0);
-        let tile = button("Tile", sel!(tileChosen:), "\r", W - 154.0, 134.0);
-
-        panel.setContentView(Some(&view));
-        panel.center();
-        NSApplication::sharedApplication(mtm).activate();
-        panel.makeKeyAndOrderFront(None);
-        *self.ivars().chooser.borrow_mut() = Some(Chooser { panel, rows, tile });
+        self.open(&d);
+        *self.ivars().chooser.borrow_mut() = Some(Chooser { panel: d.panel, rows, tile: d.ok });
         self.update_chooser();
+    }
+
+    fn show_renamer(&self, id: u32) {
+        let Some(now) = app::name_of(id) else { return };
+        let mtm = self.mtm();
+        const W: f64 = 420.0;
+        let d = self.dialog(W, HEAD + 120.0 + FOOT, "Rename Group", "The name appears in Mission Control and the menu.", "Rename", sel!(renameDone:));
+        let img = icons(mtm, &app::tiles_of(id), 44.0);
+        let size = img.size();
+        let iv = NSImageView::imageViewWithImage(&img, mtm);
+        iv.setFrame(frame(MARGIN, FOOT + 62.0, size.width, size.height));
+        d.view.addSubview(&iv);
+        let field = NSTextField::textFieldWithString(&NSString::from_str(&now), mtm);
+        field.setFont(Some(&NSFont::systemFontOfSize(15.0)));
+        field.setControlSize(NSControlSize::Large);
+        field.setBezelStyle(NSTextFieldBezelStyle::RoundedBezel);
+        field.setFrame(frame(MARGIN, FOOT + 12.0, W - 2.0 * MARGIN, 34.0));
+        d.view.addSubview(&field);
+        self.open(&d);
+        d.panel.makeFirstResponder(Some(&field));
+        unsafe { field.selectText(None) };
+        *self.ivars().renamer.borrow_mut() = Some(Renamer { panel: d.panel, field, id });
     }
 
     fn update_chooser(&self) {
@@ -319,12 +376,25 @@ fn label(mtm: MainThreadMarker, text: &str, size: f64, bold: bool, quiet: bool) 
     l
 }
 
+const MARGIN: f64 = 32.0;
+/// Space above a dialog's content (title and hint) and below it (buttons).
+const HEAD: f64 = 32.0 + 28.0 + 6.0 + 18.0 + 20.0;
+const FOOT: f64 = 78.0;
+
+struct Dialog {
+    panel: Retained<NSPanel>,
+    view: Retained<NSVisualEffectView>,
+    ok: Retained<NSButton>,
+}
+
 pub struct RowIvars {
     pid: i32,
     wid: u32,
     on: Cell<bool>,
     hover: Cell<bool>,
     check: Retained<NSImageView>,
+    name: Retained<NSTextField>,
+    title: Retained<NSTextField>,
     owner: Retained<Handler>,
 }
 
@@ -366,37 +436,40 @@ define_class!(
 
 impl Row {
     fn new(mtm: MainThreadMarker, r: NSRect, w: &MenuWindow, owner: &Handler) -> Retained<Self> {
-        let check = NSImageView::initWithFrame(mtm.alloc(), frame(r.size.width - 34.0, (r.size.height - 20.0) / 2.0, 20.0, 20.0));
+        const ICON: f64 = 44.0;
+        let (width, h) = (r.size.width, r.size.height);
+        let check = NSImageView::initWithFrame(mtm.alloc(), frame(width - 38.0, (h - 24.0) / 2.0, 24.0, 24.0));
+        let (x, tw) = (12.0 + ICON + 14.0, width - (12.0 + ICON + 14.0) - 50.0);
+        let name = label(mtm, &w.app, 15.0, true, false);
+        let title = label(mtm, &w.title, 12.0, false, true);
+        if w.title.is_empty() {
+            name.setFrame(frame(x, (h - 20.0) / 2.0, tw, 20.0));
+        } else {
+            name.setFrame(frame(x, h / 2.0 + 0.0, tw, 20.0));
+            title.setFrame(frame(x, h / 2.0 - 18.0, tw, 16.0));
+        }
         let this = Self::alloc(mtm).set_ivars(RowIvars {
             pid: w.pid,
             wid: w.wid,
             on: Cell::new(false),
             hover: Cell::new(false),
             check: check.clone(),
+            name: name.clone(),
+            title: title.clone(),
             owner: owner.retain(),
         });
         let v: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: r] };
         v.setWantsLayer(true);
         if let Some(l) = v.layer() {
-            l.setCornerRadius(10.0);
+            l.setCornerRadius(12.0);
         }
-        let h = r.size.height;
-        if let Some(img) = icon(w.pid, 32.0) {
+        if let Some(img) = icon(w.pid, ICON) {
             let iv = NSImageView::imageViewWithImage(&img, mtm);
-            iv.setFrame(frame(12.0, (h - 32.0) / 2.0, 32.0, 32.0));
+            iv.setFrame(frame(12.0, (h - ICON) / 2.0, ICON, ICON));
             v.addSubview(&iv);
         }
-        let tw = r.size.width - 56.0 - 44.0;
-        let name = label(mtm, &w.app, 13.0, true, false);
-        if w.title.is_empty() {
-            name.setFrame(frame(56.0, (h - 17.0) / 2.0, tw, 17.0));
-        } else {
-            name.setFrame(frame(56.0, h / 2.0, tw, 17.0));
-            let t = label(mtm, &w.title, 11.0, false, true);
-            t.setFrame(frame(56.0, h / 2.0 - 16.0, tw, 15.0));
-            v.addSubview(&t);
-        }
         v.addSubview(&name);
+        v.addSubview(&title);
         v.addSubview(&check);
         let area = unsafe {
             NSTrackingArea::initWithRect_options_owner_userInfo(
@@ -415,14 +488,24 @@ impl Row {
     fn show(&self) {
         let iv = self.ivars();
         let on = iv.on.get();
-        let name = if on { "checkmark.circle.fill" } else { "circle" };
-        iv.check.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None).as_deref());
-        let tint = if on { NSColor::controlAccentColor() } else { NSColor::tertiaryLabelColor() };
+        let symbol = if on { "checkmark.square.fill" } else { "square" };
+        let cfg = NSImageSymbolConfiguration::configurationWithPointSize_weight(19.0, 0.0);
+        let img = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(symbol), None);
+        iv.check.setImage(img.as_deref());
+        iv.check.setSymbolConfiguration(Some(&cfg));
+        // selected: solid accent with white on it, like a selected row in Finder
+        let (text, quiet, tint) = if on {
+            (NSColor::whiteColor(), NSColor::colorWithWhite_alpha(1.0, 0.8), NSColor::whiteColor())
+        } else {
+            (NSColor::labelColor(), NSColor::secondaryLabelColor(), NSColor::tertiaryLabelColor())
+        };
+        iv.name.setTextColor(Some(&text));
+        iv.title.setTextColor(Some(&quiet));
         iv.check.setContentTintColor(Some(&tint));
         let bg = if on {
-            NSColor::controlAccentColor().colorWithAlphaComponent(0.16)
+            NSColor::selectedContentBackgroundColor()
         } else if iv.hover.get() {
-            NSColor::labelColor().colorWithAlphaComponent(0.06)
+            NSColor::labelColor().colorWithAlphaComponent(0.07)
         } else {
             NSColor::clearColor()
         };
@@ -482,18 +565,4 @@ fn icons(mtm: MainThreadMarker, tiles: &[Tile], size: f64) -> Retained<NSImage> 
     }
     img.unlockFocus();
     img
-}
-
-fn ask_name(mtm: MainThreadMarker, now: &str) -> Option<String> {
-    let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str("Rename group"));
-    alert.setInformativeText(&NSString::from_str("The name shows on its windows in Mission Control."));
-    alert.addButtonWithTitle(&NSString::from_str("Rename"));
-    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
-    let field = NSTextField::textFieldWithString(&NSString::from_str(now), mtm);
-    field.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(240.0, 24.0)));
-    alert.setAccessoryView(Some(&field));
-    alert.window().setInitialFirstResponder(Some(&field));
-    NSApplication::sharedApplication(mtm).activate();
-    (alert.runModal() == NSAlertFirstButtonReturn).then(|| field.stringValue().to_string())
 }
