@@ -34,7 +34,7 @@ unsafe extern "C" {
     fn dlsym(h: *mut c_void, name: *const c_char) -> *mut c_void;
 }
 
-/// Looked up at run time, so a macOS without them still starts wingroup.
+/// Looked up at run time, so a macOS without them still starts Tandem.
 fn calls() -> Option<&'static Calls> {
     static FNS: OnceLock<Option<Calls>> = OnceLock::new();
     // SAFETY: each symbol is cast to the signature it is known to have; a missing one is

@@ -1,5 +1,5 @@
 //! Full screen hides the Dock, and puts it back once no group is full screen.
-//! The previous values are written to a state file so `wingroup --restore`
+//! The previous values are written to a state file so `tandem --restore`
 //! can undo it after a crash.
 
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ pub struct Saved {
 
 fn state_file() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join("Library/Application Support/wingroup/saved.txt")
+    PathBuf::from(home).join("Library/Application Support/Tandem/saved.txt")
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
@@ -43,7 +43,7 @@ pub fn restore(saved: &Saved) {
     let _ = std::fs::remove_file(state_file());
 }
 
-/// For `wingroup --restore`: undo full screen from the state file.
+/// For `tandem --restore`: undo full screen from the state file.
 pub fn restore_after_crash() -> bool {
     let Ok(text) = std::fs::read_to_string(state_file()) else { return false };
     let mut dock = false;

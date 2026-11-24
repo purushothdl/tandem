@@ -1,4 +1,4 @@
-//! wingroup: windows that stay together. See README.md and docs/ARCHITECTURE.md.
+//! Tandem: windows that stay together. See README.md and docs/ARCHITECTURE.md.
 
 mod app;
 mod core;
@@ -33,7 +33,7 @@ fn run() {
     let nsapp = NSApplication::sharedApplication(mtm);
     nsapp.setActivationPolicy(NSApplicationActivationPolicy::Accessory); // no Dock icon
     if !is_trusted(true) {
-        eprintln!("wingroup needs Accessibility permission: System Settings > Privacy & Security > Accessibility");
+        eprintln!("Tandem needs Accessibility permission: System Settings > Privacy & Security > Accessibility");
     }
     let _item = ui::menu::install(mtm);
     app::run::start();

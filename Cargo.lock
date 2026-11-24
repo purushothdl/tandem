@@ -224,7 +224,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wingroup"
+name = "tandem"
 version = "0.1.0"
 dependencies = [
  "core-foundation",

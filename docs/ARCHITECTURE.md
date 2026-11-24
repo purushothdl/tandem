@@ -3,7 +3,7 @@
 ## The idea
 
 Other apps own their windows. We can only ask them to move, then look at what happened. So
-wingroup keeps its own truth, the **layout**, and keeps steering the windows towards it.
+Tandem keeps its own truth, the **layout**, and keeps steering the windows towards it.
 
 ```
           events                      commands

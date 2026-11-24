@@ -173,11 +173,11 @@ impl Handler {
         menu.setShowsStateColumn(false);
 
         if !m.trusted {
-            let i = self.item("Allow wingroup to move windows…", "lock.shield", Some(sel!(openPrivacy:)), 0);
-            subtitle(&i, "Opens System Settings. Turn wingroup on, then reopen it");
+            let i = self.item("Allow Tandem to move windows…", "lock.shield", Some(sel!(openPrivacy:)), 0);
+            subtitle(&i, "Opens System Settings. Turn Tandem on, then reopen it");
             menu.addItem(&i);
             menu.addItem(&NSMenuItem::separatorItem(mtm));
-            menu.addItem(&self.item("Quit wingroup", "power", Some(sel!(quit:)), 0));
+            menu.addItem(&self.item("Quit Tandem", "power", Some(sel!(quit:)), 0));
             return;
         }
         if let Some(note) = self.ivars().note.take() {
@@ -236,7 +236,7 @@ impl Handler {
             menu.addItem(&self.item("Ungroup All", "rectangle.dashed", Some(sel!(ungroupAll:)), 0));
         }
         menu.addItem(&self.corners_item());
-        menu.addItem(&self.item("Quit wingroup", "power", Some(sel!(quit:)), 0));
+        menu.addItem(&self.item("Quit Tandem", "power", Some(sel!(quit:)), 0));
     }
 
     fn corners_item(&self) -> Retained<NSMenuItem> {

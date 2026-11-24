@@ -16,7 +16,7 @@ pub fn report(o: Outcome) {
 }
 
 const NO_PERMISSION: &str =
-    "Needs Accessibility permission: add wingroup in System Settings > Privacy & Security > Accessibility, then reopen";
+    "Needs Accessibility permission: add Tandem in System Settings > Privacy & Security > Accessibility, then reopen";
 
 /// Smaller windows are palettes and the like.
 pub const SMALLEST_WINDOW: f64 = 200.0;

@@ -1,4 +1,4 @@
-# wingroup
+# Tandem
 
 A macOS menu-bar app that keeps windows together. Put two to six windows side by side, tile
 them, and they resize, switch and go full screen as one.
@@ -34,7 +34,7 @@ A small window over a group stays with it, as in plain macOS. A large one counts
 ```sh
 cargo test                  # pure logic, no windows involved
 cargo clippy --all-targets
-tail -f ~/Library/Logs/wingroup.log
+tail -f ~/Library/Logs/tandem.log
 ```
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how it fits together
@@ -46,5 +46,7 @@ tail -f ~/Library/Logs/wingroup.log
 - Main display only.
 - macOS cannot merge windows in Mission Control, so groups get a bar above them instead.
 - Full screen stays below the menu bar, and hides the Dock for everything. If a crash leaves
-  the Dock hidden: `target/wingroup.app/Contents/MacOS/wingroup --restore`
+  the Dock hidden: `/Applications/Tandem.app/Contents/MacOS/tandem --restore`
 - Uses a few private macOS calls that an update could break.
+
+The icon is from [Phosphor](https://phosphoricons.com), MIT-licensed.
