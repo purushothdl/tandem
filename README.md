@@ -23,8 +23,9 @@ Rebuilding keeps the permission.
 | Swap | Drag a tile by its title bar onto another |
 | Add | Hold Shift while dragging a window onto half of a tile |
 | Change the layout | Hover the group in the menu, or ⌃⌥L |
-| Switch | Click any window of the group, Cmd-Tab, the menu, or the bar in Mission Control |
-| Change corners | Menu > **Window Corners**, then reopen apps |
+| Switch | Click any window of the group, Cmd-Tab, Mission Control, or the menu |
+| See groups in Mission Control | Menu > **Settings** > **Show Groups in Mission Control** |
+| Change corners | Menu > **Settings** > **Window Corners**, then reopen apps |
 | Everything else | The group's submenu |
 
 A small window over a group stays with it, as in plain macOS. A large one counts as separate.
@@ -44,9 +45,9 @@ tail -f ~/Library/Logs/tandem.log
 ## Limits
 
 - Main display only.
-- macOS cannot merge windows in Mission Control, so groups get a bar above them instead.
-- Full screen stays below the menu bar, and hides the Dock for everything. If a crash leaves
-  the Dock hidden: `/Applications/Tandem.app/Contents/MacOS/tandem --restore`
+- macOS cannot merge windows in Mission Control, so groups can get a bar there instead.
+- Full screen stays below the menu bar, and hides the Dock for everything. After a crash
+  the Dock comes back at the next start, or with `/Applications/Tandem.app/Contents/MacOS/tandem --restore`
 - Uses a few private macOS calls that an update could break.
 
 The icon is from [Phosphor](https://phosphoricons.com), MIT-licensed.

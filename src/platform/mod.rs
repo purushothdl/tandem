@@ -9,6 +9,7 @@ pub mod hotkeys;
 pub mod log;
 pub mod mouse;
 pub mod screen;
+pub mod settings;
 pub mod timer;
 pub mod windows;
 

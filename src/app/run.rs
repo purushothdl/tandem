@@ -13,7 +13,7 @@ use crate::core::window;
 use crate::platform::element::is_trusted;
 use crate::platform::log::log;
 use crate::platform::mouse::{self, Event, Verdict};
-use crate::platform::{apps, hotkeys, screen, timer, windows};
+use crate::platform::{apps, dock, hotkeys, screen, timer, windows};
 use crate::ui;
 use objc2::MainThreadMarker;
 use std::cell::Cell;
@@ -26,6 +26,9 @@ const TICK: u32 = 6;
 const FRONT_LOOK: u32 = 2;
 
 pub fn start() {
+    if dock::restore_after_crash() {
+        log("the Dock was still hidden from last time: restored");
+    }
     hotkeys::install(&[
         (hotkeys::KEY_T, || commands::report(commands::tile_visible())),
         (hotkeys::KEY_L, || commands::report(commands::next_layout())),

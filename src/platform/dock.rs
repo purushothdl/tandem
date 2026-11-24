@@ -1,6 +1,6 @@
 //! Full screen hides the Dock, and puts it back once no group is full screen.
-//! The previous values are written to a state file so `tandem --restore`
-//! can undo it after a crash.
+//! How it was is kept in a file, so that it can be undone after a crash: at the next start,
+//! or with `tandem --restore`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -43,7 +43,8 @@ pub fn restore(saved: &Saved) {
     let _ = std::fs::remove_file(state_file());
 }
 
-/// For `tandem --restore`: undo full screen from the state file.
+/// Undo a full screen that was never left: a crash, or being killed while it was on. Without
+/// this, the hidden Dock would count as how the user had it. True if there was one.
 pub fn restore_after_crash() -> bool {
     let Ok(text) = std::fs::read_to_string(state_file()) else { return false };
     let mut dock = false;

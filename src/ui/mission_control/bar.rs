@@ -9,7 +9,7 @@ use crate::core::bar_phase::{BarPhase, Decision};
 use crate::core::bar_spot::{Spot, spot as find_spot};
 use crate::core::geometry::Rect;
 use crate::platform::mouse::PressWatch;
-use crate::platform::screen;
+use crate::platform::{screen, settings};
 use crate::ui::{cocoa, overlay_panel, rect, rounded_view};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -319,6 +319,10 @@ fn update(
     if s.pressed_at.is_some_and(|t| t.elapsed() < AWAY) {
         s.close();
         return (Now { away: true, ..Now::default() }, None);
+    }
+    if !settings::shows_bar() {
+        s.close();
+        return (Now::default(), None);
     }
     let key = (view.windows, (screen.0 as u32, screen.1 as u32));
     match s.phase.step(view.area, calm, s.up.is_some()) {

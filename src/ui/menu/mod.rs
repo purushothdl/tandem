@@ -8,7 +8,7 @@ mod layout_strip;
 use crate::app;
 use crate::app::commands::{self, Outcome};
 use crate::app::views::{self, MenuGroup, MenuWindow, app_names};
-use crate::platform::{apps, corners};
+use crate::platform::{apps, corners, settings};
 use crate::ui::widgets::*;
 use dialogs::{Chooser, Renamer};
 use group_row::{GroupRow, light};
@@ -116,6 +116,10 @@ define_class!(
             if let Some((id, name)) = new {
                 self.report(commands::rename(id, &name));
             }
+        }
+        #[unsafe(method(toggleBar:))]
+        fn toggle_bar(&self, _s: Option<&AnyObject>) {
+            self.report(commands::toggle_bar());
         }
         #[unsafe(method(setCorners:))]
         fn set_corners(&self, i: &NSMenuItem) {
@@ -241,8 +245,23 @@ impl Handler {
         if m.groups.len() > 1 {
             menu.addItem(&self.item("Ungroup All", "rectangle.dashed", Some(sel!(ungroupAll:)), 0));
         }
-        menu.addItem(&self.corners_item());
+        menu.addItem(&self.settings_item());
         menu.addItem(&self.item("Quit Tandem", "power", Some(sel!(quit:)), 0));
+    }
+
+    fn settings_item(&self) -> Retained<NSMenuItem> {
+        let sub = NSMenu::new(self.mtm());
+        sub.setAutoenablesItems(false);
+        let bar = self.item("Show Groups in Mission Control", "", Some(sel!(toggleBar:)), 0);
+        if settings::shows_bar() {
+            bar.setState(NSControlStateValueOn);
+        }
+        sub.addItem(&bar);
+        sub.addItem(&self.corners_item());
+        let i = self.item("Settings", "gearshape", None, 0);
+        i.setEnabled(true);
+        i.setSubmenu(Some(&sub));
+        i
     }
 
     fn corners_item(&self) -> Retained<NSMenuItem> {
@@ -258,7 +277,7 @@ impl Handler {
         }
         sub.addItem(&NSMenuItem::separatorItem(self.mtm()));
         sub.addItem(&self.item("Reopen apps to see it", "", None, 0));
-        let i = self.item("Window Corners", "square", None, 0);
+        let i = self.item("Window Corners", "", None, 0);
         i.setEnabled(true);
         i.setSubmenu(Some(&sub));
         i

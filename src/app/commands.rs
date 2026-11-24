@@ -5,7 +5,7 @@ use crate::core::layout::{Layout, presets};
 use crate::core::window::{self, Window, WindowRef};
 use crate::platform::element::{find_window, is_trusted};
 use crate::platform::log::log;
-use crate::platform::{corners, dock, focus, screen, timer, windows};
+use crate::platform::{corners, dock, focus, screen, settings, timer, windows};
 use std::time::Duration;
 
 /// What was done, or what to tell the user.
@@ -204,6 +204,13 @@ fn use_freed_space() {
             g.place();
         }
     });
+}
+
+/// Show the bar of groups in Mission Control, or not.
+pub fn toggle_bar() -> Outcome {
+    let on = !settings::shows_bar();
+    settings::set_shows_bar(on);
+    Ok(format!("Mission Control bar {}", if on { "on" } else { "off" }))
 }
 
 /// Apps pick this up when they are next opened.
