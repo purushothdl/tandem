@@ -1,5 +1,6 @@
 mod app;
 mod ax;
+mod cards;
 mod chrome;
 mod hotkeys;
 mod labels;

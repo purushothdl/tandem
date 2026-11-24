@@ -34,11 +34,11 @@ thread_local! {
     static SHOWN: RefCell<HashMap<u32, Shown>> = RefCell::new(HashMap::new());
 }
 
-fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
+pub fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))
 }
 
-fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
+pub fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
     let p = NSPanel::initWithContentRect_styleMask_backing_defer(
         mtm.alloc(),
         rect(0.0, 0.0, 10.0, 10.0),
@@ -110,7 +110,7 @@ fn build(mtm: MainThreadMarker, l: &Label) -> Shown {
 }
 
 /// Move a panel's opacity a step towards where it should be.
-fn fade(p: &NSPanel, on: bool, now: &mut f64) {
+pub fn fade(p: &NSPanel, on: bool, now: &mut f64) {
     let next = if on { (*now + 0.16).min(1.0) } else { (*now - 0.22).max(0.0) };
     if next == *now {
         return;
@@ -151,6 +151,7 @@ pub fn refresh(mtm: MainThreadMarker, mx: f64, my: f64, screen_h: f64) {
         if labels.is_empty() {
             // kept for next time: building them again is slow enough to see
             s.values_mut().for_each(hide);
+            crate::cards::hide();
             MOVED.set(None);
             return;
         }
@@ -169,6 +170,8 @@ pub fn refresh(mtm: MainThreadMarker, mx: f64, my: f64, screen_h: f64) {
             }
         }
         let still = MOVED.get().is_none_or(|t| t.elapsed() > STILL);
+        // pointing at a group's card outlines all of its windows
+        let card = crate::cards::refresh(mtm, still, mx, my, screen_h);
         let hovered = labels.iter().find(|l| l.hovered).map(|l| (l.group, l.wid));
         for l in &labels {
             let Some(o) = s.get_mut(&l.wid) else { continue };
@@ -180,7 +183,7 @@ pub fn refresh(mtm: MainThreadMarker, mx: f64, my: f64, screen_h: f64) {
             }
             fade(&o.pill, still, &mut o.pill_on);
             // macOS outlines the one under the pointer itself; its partners are ours
-            let partner = hovered.is_some_and(|(g, wid)| g == l.group && wid != l.wid);
+            let partner = card == Some(l.group) || hovered.is_some_and(|(g, wid)| g == l.group && wid != l.wid);
             fade(&o.ring, still && partner, &mut o.ring_on);
         }
     });

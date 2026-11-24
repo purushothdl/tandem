@@ -94,6 +94,8 @@ struct App {
     verify: Option<(u32, Instant, usize)>,
     /// Mission Control was open until at least this moment.
     mc_seen: Option<Instant>,
+    /// A group's card was clicked: until Mission Control is closed and the group is in front.
+    card: Option<CardPick>,
     /// The window on top in Mission Control; a change means one was picked.
     mc_top: u32,
     front_pid: i32,
@@ -124,6 +126,7 @@ thread_local! {
         counter: 0,
         verify: None,
         mc_seen: None,
+        card: None,
         mc_top: 0,
         front_pid: 0,
         press: None,
@@ -1447,6 +1450,55 @@ pub fn switch_to(id: u32) -> String {
     })
 }
 
+#[derive(Clone, Copy)]
+struct CardPick {
+    group: u32,
+    at: Instant,
+    /// When Mission Control was first seen closed.
+    closed: Option<Instant>,
+    again: Option<Instant>,
+}
+
+/// A group's card in Mission Control was pressed. The press also closes Mission Control.
+pub fn pick_card(id: u32) {
+    log(&format!("card of group {id} pressed"));
+    with(|a| {
+        a.prepared = None;
+        a.card = Some(CardPick { group: id, at: Instant::now(), closed: None, again: None });
+    });
+    switch_to(id);
+}
+
+/// Closing Mission Control can hand the front back to the window it was opened from.
+fn finish_card() {
+    let again = with_try(|a| {
+        let mut c = a.card?;
+        let all = ax::all_windows();
+        let open = ax::mission_control_open(&all);
+        if c.closed.is_none() && !open {
+            c.closed = Some(Instant::now());
+        }
+        let done = c.closed.is_some_and(|t| t.elapsed() > Duration::from_millis(350));
+        if done || c.at.elapsed() > Duration::from_millis(1800) {
+            a.card = None;
+            return None;
+        }
+        let top = ax::normal(&all).first().map(|w| w.id)?;
+        let up = a.groups.iter().find(|g| g.id == c.group)?.has(top).is_some();
+        let wait = c.again.is_some_and(|t| t.elapsed() < Duration::from_millis(150));
+        let go = c.closed.is_some() && !up && !wait;
+        if go {
+            c.again = Some(Instant::now());
+            log(&format!("card: {top} is in front instead, switching again"));
+        }
+        a.card = Some(c);
+        go.then_some(c.group)
+    });
+    if let Some(Some(id)) = again {
+        switch_to(id);
+    }
+}
+
 fn activate(pid: i32, win: &Elem) {
     win.raise();
     if let Some(app) = Elem::app(pid) {
@@ -1568,6 +1620,7 @@ extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
             a.tick();
         }
     });
+    finish_card();
     if let Some(mtm) = MainThreadMarker::new() {
         let screens = NSScreen::screens(mtm);
         if screens.count() > 0 {
@@ -1745,4 +1798,47 @@ pub fn mission_control_labels(mx: f64, my: f64) -> Option<Vec<Label>> {
         }
         Some(out)
     })?
+}
+
+/// One group, as a card in Mission Control.
+#[derive(Clone, PartialEq)]
+pub struct Card {
+    pub group: u32,
+    pub name: String,
+    /// Each tile as parts of the whole, and its app.
+    pub tiles: Vec<(Rect, i32)>,
+}
+
+/// A card per group with a window on screen, the group in use first, and the places taken
+/// by thumbnails and what Mission Control draws on them.
+pub fn mission_control_cards() -> Option<(Vec<Card>, Vec<Rect>)> {
+    with_try(|a| {
+        let all = ax::all_windows();
+        let order = ax::normal(&all);
+        let d = primary_bounds(&all)?;
+        let me = std::process::id() as i32;
+        let mut cards: Vec<Card> = a
+            .groups
+            .iter()
+            .filter(|g| order.iter().any(|w| g.has(w.id).is_some()))
+            .map(|g| {
+                let r = g.layout.region();
+                let part = |f: &Rect| Rect { x: (f.x - r.x) / r.w, y: (f.y - r.y) / r.h, w: f.w / r.w, h: f.h / r.h };
+                let frames = g.layout.frames();
+                let tiles = (frames.iter().zip(&g.members).enumerate())
+                    .filter(|(i, (f, _))| !g.layout.is_hidden(*i) && f.w > 1.0 && f.h > 1.0)
+                    .map(|(_, (f, m))| (part(f), m.pid))
+                    .collect();
+                Card { group: g.id, name: g.name.clone(), tiles }
+            })
+            .collect();
+        cards.sort_by_key(|c| a.active != Some(c.group));
+        let small = |w: &WinInfo| w.layer == 17 && w.bounds.w < d.w * 0.5;
+        let taken = order.iter().chain(all.iter().filter(|w| small(w))).filter(|w| w.pid != me).map(|w| w.bounds).collect();
+        Some((cards, taken))
+    })?
+}
+
+fn primary_bounds(all: &[WinInfo]) -> Option<Rect> {
+    all.iter().find(|w| w.layer == 18).map(|w| w.bounds)
 }
