@@ -174,7 +174,7 @@ impl Handler {
         match &m.preview {
             Some(tiles) => {
                 let i = self.item(&format!("Tile {} Windows", tiles.len()), "", Some(sel!(tileVisible:)), 0);
-                subtitle(&i, &names(tiles));
+                subtitle(&i, &short(&names(tiles), 34));
                 i.setImage(Some(&padded(mtm, &icons(mtm, tiles, 28.0), false)));
                 key(&i, "t");
                 menu.addItem(&i);
@@ -400,7 +400,7 @@ impl Handler {
             // two windows of one app need telling apart
             if g.tiles.iter().filter(|o| o.pid == t.pid).count() > 1 {
                 if let Some(title) = windows.iter().find(|w| w.wid == t.wid).map(|w| &w.title).filter(|t| !t.is_empty()) {
-                    name = format!("{name} — {}", title.chars().take(36).collect::<String>());
+                    name = format!("{name} — {}", short(title, 30));
                 }
             }
             let i = self.item(&name, "", Some(sel!(removeWindow:)), t.wid);
@@ -602,6 +602,8 @@ impl LayoutThumb {
     }
 }
 
+/// Longer group names end in "…", so one long name cannot widen the whole menu.
+const MAX_NAME: f64 = 170.0;
 const MORE_W: f64 = 34.0;
 
 pub struct GroupRowIvars {
@@ -675,7 +677,7 @@ impl GroupRow {
         let iw = img.size().width;
         let name = label(mtm, &g.name, 13.0, false, false);
         name.sizeToFit();
-        let nw = name.frame().size.width.min(240.0);
+        let nw = name.frame().size.width.min(MAX_NAME);
         let w = (LEFT + iw + 10.0 + nw + 16.0 + MORE_W + 6.0).max(260.0);
         let x = LEFT + iw + 10.0;
         let tw = w - x - MORE_W - 14.0;
@@ -704,6 +706,9 @@ impl GroupRow {
             more: more.clone(),
         });
         let v: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame(0.0, 0.0, w, h)] };
+        if name.fittingSize().width > tw {
+            v.setToolTip(Some(&NSString::from_str(&g.name)));
+        }
         v.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         let iv = NSImageView::imageViewWithImage(&img, mtm);
         iv.setFrame(frame(LEFT, (h - ICON) / 2.0, iw, ICON));
@@ -922,6 +927,15 @@ fn subtitle(i: &NSMenuItem, text: &str) {
 fn key(i: &NSMenuItem, k: &str) {
     i.setKeyEquivalent(&NSString::from_str(k));
     i.setKeyEquivalentModifierMask(NSEventModifierFlags::Control | NSEventModifierFlags::Option);
+}
+
+/// Cut to this many characters, with "…".
+fn short(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max - 1).collect();
+    format!("{}…", cut.trim_end())
 }
 
 fn names(tiles: &[Tile]) -> String {
