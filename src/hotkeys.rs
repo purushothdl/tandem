@@ -1,5 +1,5 @@
 //! Global shortcuts through Carbon, which needs no extra permission.
-//! Control-Option-T tiles.
+//! Control-Option-T tiles, Control-Option-L steps through the layouts.
 
 use std::ffi::c_void;
 
@@ -41,7 +41,10 @@ extern "C" fn pressed(_next: *mut c_void, event: *mut c_void, _data: *mut c_void
         )
     };
     if err == 0 {
-        let msg = crate::app::tile_visible();
+        let msg = match id.id {
+            1 => crate::app::tile_visible(),
+            _ => crate::app::next_layout(),
+        };
         crate::app::log(&msg);
     }
     0
@@ -53,7 +56,7 @@ pub fn install() {
         let target = GetApplicationEventTarget();
         let ty = EventType { class: four(b"keyb"), kind: 5 };
         InstallEventHandler(target, pressed, 1, &ty, std::ptr::null_mut(), std::ptr::null_mut());
-        for (id, code) in [(1, 17u32)] {
+        for (id, code) in [(1, 17u32), (2, 37)] {
             let mut out = std::ptr::null_mut();
             let err = RegisterEventHotKey(code, CONTROL_OPTION, HotKeyId { signature: four(b"wgrp"), id }, target, 0, &mut out);
             if err != 0 {

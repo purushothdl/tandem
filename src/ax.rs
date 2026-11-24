@@ -114,8 +114,8 @@ pub fn event_location(event: *mut c_void) -> (f64, f64) {
     (p.x, p.y)
 }
 
-pub fn control_held(event: *mut c_void) -> bool {
-    unsafe { CGEventGetFlags(event) & (1 << 18) != 0 }
+pub fn shift_held(event: *mut c_void) -> bool {
+    unsafe { CGEventGetFlags(event) & (1 << 17) != 0 }
 }
 
 pub fn click_count(event: *mut c_void) -> i64 {

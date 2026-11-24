@@ -386,6 +386,14 @@ impl Handler {
         let sub = NSMenu::new(mtm);
         sub.setAutoenablesItems(false);
         sub.setShowsStateColumn(false);
+        if !g.layouts.is_empty() {
+            sub.addItem(&NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Layout   ⌃⌥L"), mtm));
+            let i = self.item("Layout", "", None, 0);
+            i.setEnabled(true);
+            i.setView(Some(&layout_strip(mtm, g, self)));
+            sub.addItem(&i);
+            sub.addItem(&NSMenuItem::separatorItem(mtm));
+        }
         let room = g.tiles.len() < app::MAX_TILES;
         sub.addItem(&self.item("Add Windows…", "plus.rectangle.on.rectangle", room.then_some(sel!(addWindows:)), g.id));
         let out = NSMenu::new(mtm);
@@ -479,6 +487,118 @@ impl SlimScroller {
         let r = frame(k.origin.x + (k.size.width - 9.0) / 2.0, k.origin.y + 2.0, 9.0, k.size.height - 4.0);
         NSColor::labelColor().colorWithAlphaComponent(0.24).setFill();
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 2.5, 2.5).fill();
+    }
+}
+
+/// The layouts as a row of small pictures.
+fn layout_strip(mtm: MainThreadMarker, g: &MenuGroup, owner: &Handler) -> Retained<NSView> {
+    const W: f64 = 46.0;
+    const H: f64 = 32.0;
+    const GAP: f64 = 6.0;
+    let n = g.layouts.len() as f64;
+    let strip = NSView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, 28.0 + n * W + (n - 1.0) * GAP, H + 10.0));
+    for (k, l) in g.layouts.iter().enumerate() {
+        let t = LayoutThumb::new(mtm, frame(14.0 + k as f64 * (W + GAP), 5.0, W, H), g.id, k, l, owner);
+        strip.addSubview(&t);
+    }
+    strip
+}
+
+pub struct ThumbIvars {
+    group: u32,
+    index: usize,
+    rects: Vec<crate::layout::Rect>,
+    main: bool,
+    fits: bool,
+    current: bool,
+    hover: Cell<bool>,
+    owner: Retained<Handler>,
+}
+
+define_class!(
+    // One layout, drawn small. Click to use it.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WGLayoutThumb"]
+    #[ivars = ThumbIvars]
+    struct LayoutThumb;
+
+    impl LayoutThumb {
+        #[unsafe(method(drawRect:))]
+        fn draw(&self, _r: NSRect) {
+            let iv = self.ivars();
+            let b = self.bounds();
+            let hot = iv.hover.get() && iv.fits;
+            let base = if hot || iv.current { NSColor::controlAccentColor() } else { NSColor::labelColor() };
+            let dim = if iv.fits { 1.0 } else { 0.35 };
+            let plate = if hot { base.colorWithAlphaComponent(0.16) } else { NSColor::labelColor().colorWithAlphaComponent(0.06 * dim) };
+            plate.setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(b, 6.0, 6.0).fill();
+            let (w, h) = (b.size.width - 8.0, b.size.height - 8.0);
+            for (i, r) in iv.rects.iter().enumerate() {
+                // AppKit draws from the bottom
+                let t = frame(4.0 + r.x * w + 1.0, 4.0 + (1.0 - r.y - r.h) * h + 1.0, r.w * w - 2.0, r.h * h - 2.0);
+                let strong = if iv.main && i == 0 { 0.85 } else { 0.45 };
+                base.colorWithAlphaComponent(strong * dim).setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(t, 2.0, 2.0).fill();
+            }
+        }
+        #[unsafe(method(mouseEntered:))]
+        fn entered(&self, _e: &NSEvent) {
+            self.ivars().hover.set(true);
+            self.setNeedsDisplay(true);
+        }
+        #[unsafe(method(mouseExited:))]
+        fn exited(&self, _e: &NSEvent) {
+            self.ivars().hover.set(false);
+            self.setNeedsDisplay(true);
+        }
+        #[unsafe(method(mouseUp:))]
+        fn up(&self, _e: &NSEvent) {
+            let iv = self.ivars();
+            if !iv.fits {
+                return;
+            }
+            // close the whole menu, not just this submenu
+            let item = unsafe { self.superview() }.and_then(|s| s.enclosingMenuItem());
+            if let Some(menu) = item.and_then(|i| unsafe { i.menu() }) {
+                if let Some(top) = unsafe { menu.supermenu() } {
+                    top.cancelTracking();
+                }
+                menu.cancelTracking();
+            }
+            iv.owner.say(app::set_layout(iv.group, iv.index));
+        }
+    }
+);
+
+impl LayoutThumb {
+    fn new(mtm: MainThreadMarker, r: NSRect, group: u32, index: usize, l: &app::LayoutChoice, owner: &Handler) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ThumbIvars {
+            group,
+            index,
+            rects: l.rects.clone(),
+            main: l.main,
+            fits: l.fits,
+            current: l.current,
+            hover: Cell::new(false),
+            owner: owner.retain(),
+        });
+        let v: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: r] };
+        if !l.fits {
+            v.setToolTip(Some(&NSString::from_str("These apps cannot get that small")));
+        }
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                NSTrackingAreaOptions::MouseEnteredAndExited | NSTrackingAreaOptions::ActiveAlways | NSTrackingAreaOptions::InVisibleRect,
+                Some(&v),
+                None,
+            )
+        };
+        v.addTrackingArea(&area);
+        v
     }
 }
 

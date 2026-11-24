@@ -6,7 +6,7 @@
 
 use crate::ax::{self, Elem, Observer, RawElem, WinInfo};
 use crate::chrome;
-use crate::layout::{Layout, Rect, Seam};
+use crate::layout::{presets, Layout, Preset, Rect, Seam};
 use crate::writer;
 use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
@@ -64,12 +64,16 @@ struct Group {
     layout: Layout,
     expected: Vec<Rect>,
     changed_at: Instant,
+    /// The minimum sizes known before the seam drag going on.
+    mins_before_drag: Option<Vec<(f64, f64)>>,
     /// Put the windows in place at this moment (after a drop).
     settle_at: Option<Instant>,
     /// Last time the user actually moved a seam.
     seam_moved_at: Option<Instant>,
     /// Windows gliding to `expected`: where each started, and when.
     glide: Option<(Vec<Rect>, Instant)>,
+    /// The layout picked last, to step on from.
+    preset: usize,
     name: String,
     /// The user chose the name.
     named: bool,
@@ -288,6 +292,39 @@ impl Group {
         }
     }
 
+    /// The group in another shape. Big spots go to the tile in use; the others keep their order.
+    fn arranged(&self, p: &Preset) -> Layout {
+        let frames = self.layout.frames();
+        let mut ids: Vec<usize> = (0..self.members.len()).collect();
+        ids.sort_by(|a, b| {
+            let (a, b) = (&frames[*a], &frames[*b]);
+            (a.x + a.w / 4.0).total_cmp(&(b.x + b.w / 4.0)).then(a.y.total_cmp(&b.y))
+        });
+        if p.main {
+            if let Some(u) = self.has(self.used) {
+                ids.retain(|i| *i != u);
+                ids.insert(0, u);
+            }
+        }
+        let mut rects = vec![Rect::default(); ids.len()];
+        for (slot, i) in ids.into_iter().enumerate() {
+            rects[i] = p.rects[slot];
+        }
+        self.layout.rearranged(&rects)
+    }
+
+    fn set_preset(&mut self, k: usize, order: &[WinInfo]) -> bool {
+        let Some(p) = presets(self.members.len()).get(k).cloned() else { return false };
+        let l = self.arranged(&p);
+        if !l.fits() {
+            return false;
+        }
+        self.preset = k;
+        self.layout = l;
+        self.place_smoothly(order, None);
+        true
+    }
+
     /// Keep the automatic name in step, unless the user chose one.
     fn auto_name(&mut self) {
         if !self.named {
@@ -446,18 +483,16 @@ struct Press {
     looked: Instant,
     /// The tile it would trade places with.
     over: Option<u32>,
-    /// Not in a group: with Control held it joins this one.
+    /// Not in a group: with Shift held it joins this one.
     pid: i32,
     pane: bool,
     join: Option<Join>,
 }
 
-/// Where a dragged pane would go: half of a tile.
+/// The tile a dragged pane would share with, and what it would get.
 #[derive(Clone, Copy)]
 struct Join {
     tile: u32,
-    side: bool,
-    before: bool,
     half: Rect,
 }
 
@@ -580,16 +615,32 @@ impl App {
 
     /// Minimum widths the writers found out. Applied even mid-drag, so the seam stops dead.
     fn learn(&mut self) {
-        for (wid, width, v) in writer::take_minimums() {
-            for g in &mut self.groups {
-                if let Some(i) = g.has(wid) {
-                    if g.layout.learn_min(i, width, v) {
-                        log(&format!("window {wid}: minimum {} {v}", if width { "width" } else { "height" }));
-                        if !g.layout.fits() {
-                            log("these windows' minimum sizes do not fit together");
-                        }
-                        g.place();
+        let dragging = self.drag.map(|d| d.0);
+        for m in writer::take_minimums() {
+            for (gi, g) in self.groups.iter_mut().enumerate() {
+                let Some(i) = g.has(m.wid) else { continue };
+                if m.sure {
+                    if let Some(x) = g.mins_before_drag.as_mut().and_then(|v| v.get_mut(i)) {
+                        let x = if m.width { &mut x.0 } else { &mut x.1 };
+                        *x = x.max(m.size);
                     }
+                } else if dragging != Some(gi) {
+                    continue;
+                }
+                if g.layout.learn_min(i, m.width, m.size) {
+                    let what = if m.width { "width" } else { "height" };
+                    log(&format!("window {}: minimum {what} {}{}", m.wid, m.size, if m.sure { "" } else { " (for this drag)" }));
+                    if !g.layout.fits() {
+                        log("these windows' minimum sizes do not fit together");
+                    }
+                    g.place();
+                }
+            }
+        }
+        if dragging.is_none() {
+            for g in &mut self.groups {
+                if let Some(m) = g.mins_before_drag.take() {
+                    g.layout.restore_mins(&m);
                 }
             }
         }
@@ -646,7 +697,7 @@ impl App {
         }
     }
 
-    fn mouse(&mut self, kind: u32, x: f64, y: f64, clicks: i64, control: bool) -> Verdict {
+    fn mouse(&mut self, kind: u32, x: f64, y: f64, clicks: i64, shift: bool) -> Verdict {
         match kind {
             1 => {
                 self.drag = None;
@@ -668,6 +719,7 @@ impl App {
                     }
                     let Some(s) = g.layout.seams().get(k).copied() else { return Verdict::Pass };
                     let off = if s.side { x } else { y } - s.at;
+                    g.mins_before_drag = Some(g.layout.mins().to_vec());
                     self.drag = Some((gi, k, off));
                     return Verdict::Swallow;
                 }
@@ -707,11 +759,11 @@ impl App {
                 Verdict::Pass
             }
             6 if self.press.is_some() => {
-                self.drag_tile(x, y, control);
+                self.drag_tile(x, y, shift);
                 Verdict::Pass
             }
             2 if self.press.is_some() => {
-                self.drop_tile(x, y, control);
+                self.drop_tile(x, y, shift);
                 Verdict::Pass
             }
             6 if self.drag.is_some() => {
@@ -779,7 +831,7 @@ impl App {
     }
 
     /// A tile is perhaps being dragged by its title bar: note which tile is under the pointer.
-    fn drag_tile(&mut self, x: f64, y: f64, control: bool) {
+    fn drag_tile(&mut self, x: f64, y: f64, shift: bool) {
         let Some(p) = &mut self.press else { return };
         if !p.moving {
             // only now and then: this runs for every drag anywhere in a tile
@@ -797,17 +849,12 @@ impl App {
         }
         let g = self.groups.iter().find(|g| g.id == p.group);
         if p.pane {
-            p.join = g.filter(|_| control).and_then(|g| {
+            p.join = g.filter(|_| shift).and_then(|g| {
                 let frames = g.layout.frames();
                 let i = (0..g.members.len()).find(|&i| !g.layout.is_hidden(i) && frames[i].contains(x, y))?;
-                let r = frames[i];
-                // the half at the nearest edge
-                let (fx, fy) = ((x - r.x) / r.w, (y - r.y) / r.h);
-                let edges = [(fx, true, true), (1.0 - fx, true, false), (fy, false, true), (1.0 - fy, false, false)];
-                let (_, side, before) = edges.into_iter().min_by(|a, b| a.0.total_cmp(&b.0))?;
-                let (w, h) = if side { (r.w / 2.0, r.h) } else { (r.w, r.h / 2.0) };
-                let (x, y) = if before { (r.x, r.y) } else { (r.right() - w, r.bottom() - h) };
-                Some(Join { tile: g.members[i].wid, side, before, half: Rect { x, y, w, h } })
+                let mut l = g.layout.clone();
+                let new = l.split(i);
+                l.fits().then(|| Join { tile: g.members[i].wid, half: l.frames()[new] })
             });
             return;
         }
@@ -820,7 +867,7 @@ impl App {
         }
     }
 
-    /// A pane was dropped on a tile with Control held.
+    /// A pane was dropped on a tile with Shift held.
     fn join(&mut self) {
         let Some((_, id, pid, wid, from, j)) = self.joining.take_if(|j| j.0 <= Instant::now()) else { return };
         let Some(g) = self.groups.iter().find(|g| g.id == id) else { return };
@@ -830,7 +877,7 @@ impl App {
             return;
         }
         let mut layout = g.layout.clone();
-        layout.insert(i, j.side, j.before);
+        layout.split(i);
         if !layout.fits() {
             log("no join: it does not fit there");
             return;
@@ -852,8 +899,8 @@ impl App {
     }
 
     /// Let go: trade places with the tile under the pointer, or go back.
-    fn drop_tile(&mut self, x: f64, y: f64, control: bool) {
-        self.drag_tile(x, y, control);
+    fn drop_tile(&mut self, x: f64, y: f64, shift: bool) {
+        self.drag_tile(x, y, shift);
         let Some(p) = self.press.take().filter(|p| p.moving) else { return };
         if p.pane {
             if let Some(j) = p.join {
@@ -1102,6 +1149,7 @@ impl App {
             expected: Vec::new(),
             changed_at: Instant::now(),
             settle_at: None,
+            mins_before_drag: None,
             seam_moved_at: None,
             id: 0,
             stack: Vec::new(),
@@ -1110,6 +1158,7 @@ impl App {
             handed_at: None,
             used: 0,
             glide: None,
+            preset: 0,
             name: String::new(),
             named: false,
             full: false,
@@ -1326,6 +1375,48 @@ pub fn equalize(id: Option<u32>) -> String {
     })
 }
 
+pub fn set_layout(id: u32, k: usize) -> String {
+    let msg = with(|a| {
+        a.drag = None;
+        match a.groups.iter_mut().find(|g| g.id == id) {
+            Some(g) => {
+                if g.set_preset(k, &ax::window_order()) {
+                    "Layout changed"
+                } else {
+                    "No room for that layout"
+                }
+            }
+            None => "No group",
+        }
+    });
+    if msg == "Layout changed" {
+        switch_to(id);
+    }
+    msg.into()
+}
+
+/// The next layout that fits and looks different.
+pub fn next_layout() -> String {
+    with(|a| {
+        a.drag = None;
+        let Some(g) = a.target_group().and_then(|i| a.groups.get_mut(i)) else { return "No group".into() };
+        let order = ax::window_order();
+        let n = presets(g.members.len()).len();
+        let now = g.layout.frames();
+        let same = |l: &Layout| l.frames().iter().zip(&now).all(|(a, b)| a.distance(b) < 24.0);
+        let next = (1..=n).map(|s| (g.preset + s) % n.max(1)).find(|&k| {
+            presets(g.members.len()).get(k).is_some_and(|p| {
+                let l = g.arranged(p);
+                l.fits() && !same(&l)
+            })
+        });
+        match next {
+            Some(k) if g.set_preset(k, &order) => "Next layout".into(),
+            _ => "No other layout fits".into(),
+        }
+    })
+}
+
 pub fn ungroup(id: Option<u32>) -> String {
     with(|a| match pick(a, id) {
         Some(i) => {
@@ -1441,8 +1532,8 @@ extern "C" fn mouse_tap(_proxy: *mut c_void, kind: u32, event: *mut c_void, _inf
     }
     let (x, y) = ax::event_location(event);
     let clicks = ax::click_count(event);
-    let control = ax::control_held(event);
-    match with_try(|a| a.mouse(kind, x, y, clicks, control)).unwrap_or(Verdict::Pass) {
+    let shift = ax::shift_held(event);
+    match with_try(|a| a.mouse(kind, x, y, clicks, shift)).unwrap_or(Verdict::Pass) {
         Verdict::Swallow => {
             crate::overlay::refresh_at(x, y); // the bar moves with the pointer, not a timer later
             return std::ptr::null_mut();
@@ -1527,7 +1618,16 @@ pub struct Tile {
     pub wid: u32,
 }
 
+pub struct LayoutChoice {
+    /// As parts of a whole; the first is the big spot, if there is one.
+    pub rects: Vec<Rect>,
+    pub main: bool,
+    pub fits: bool,
+    pub current: bool,
+}
+
 pub struct MenuGroup {
+    pub layouts: Vec<LayoutChoice>,
     pub id: u32,
     pub name: String,
     pub tiles: Vec<Tile>,
@@ -1587,6 +1687,19 @@ pub fn menu_model() -> MenuModel {
             .groups
             .iter()
             .map(|g| MenuGroup {
+                layouts: presets(g.members.len())
+                    .into_iter()
+                    .map(|p| {
+                        let l = g.arranged(&p);
+                        let shape = |l: &Layout| {
+                            let mut f = l.frames();
+                            f.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+                            f
+                        };
+                        let current = shape(&l).iter().zip(shape(&g.layout)).all(|(a, b)| a.distance(&b) < 24.0);
+                        LayoutChoice { fits: l.fits(), current, main: p.main, rects: p.rects }
+                    })
+                    .collect(),
                 id: g.id,
                 name: g.name.clone(),
                 tiles: g.members.iter().map(|m| Tile { pid: m.pid, wid: m.wid }).collect(),

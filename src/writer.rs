@@ -7,10 +7,19 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// (window id, is it the width, smallest size the app accepts), waiting for the main thread.
-static MINIMUMS: Mutex<Vec<(u32, bool, f64)>> = Mutex::new(Vec::new());
+/// A size an app would not go below, waiting for the main thread.
+pub struct Minimum {
+    pub wid: u32,
+    pub width: bool,
+    pub size: f64,
+    /// It kept refusing with nothing else going on. Otherwise it only looks that way, which
+    /// is good enough to stop a seam being dragged but must not be remembered.
+    pub sure: bool,
+}
 
-pub fn take_minimums() -> Vec<(u32, bool, f64)> {
+static MINIMUMS: Mutex<Vec<Minimum>> = Mutex::new(Vec::new());
+
+pub fn take_minimums() -> Vec<Minimum> {
     std::mem::take(&mut *MINIMUMS.lock().unwrap())
 }
 
@@ -63,7 +72,7 @@ fn run(el: &Elem, wid: u32, rx: &Receiver<Rect>) {
         }
         let mut tries = 0;
         let Some(mut now) = el.frame() else { continue };
-        while !close(&now, &target) && tries < 8 {
+        while !close(&now, &target) && tries < 14 {
             let Some(got) = place(el, now, target) else { break };
             now = got;
             let newest = rx.try_iter().last();
@@ -71,10 +80,12 @@ fn run(el: &Elem, wid: u32, rx: &Receiver<Rect>) {
                 if got > asked + 2.0 {
                     // same size for two different requests, or still refusing when idle
                     let before = refused[axis].filter(|r| r.1 == got);
-                    let lasting = before.is_some_and(|r| r.2.elapsed() > Duration::from_millis(60));
-                    let same = before.is_some_and(|r| r.0 != asked);
-                    if lasting && (same || newest.is_none()) {
-                        MINIMUMS.lock().unwrap().push((wid, axis == 0, got.ceil()));
+                    let lasted = before.map_or(Duration::ZERO, |r| r.2.elapsed());
+                    let asked_again = before.is_some_and(|r| r.0 != asked);
+                    // a busy app keeps its old size for a moment; a real minimum stays
+                    let sure = newest.is_none() && tries >= 9 && lasted > Duration::from_millis(500);
+                    if sure || (asked_again && lasted > Duration::from_millis(90)) {
+                        MINIMUMS.lock().unwrap().push(Minimum { wid, width: axis == 0, size: got.ceil(), sure });
                     }
                     refused[axis] = Some((asked, got, before.map_or_else(Instant::now, |r| r.2)));
                 } else {
@@ -89,7 +100,8 @@ fn run(el: &Elem, wid: u32, rx: &Receiver<Rect>) {
                 None => {
                     tries += 1;
                     if !close(&now, &target) {
-                        std::thread::sleep(Duration::from_millis(12));
+                        // quick at first, then patient
+                        std::thread::sleep(Duration::from_millis(if tries < 4 { 12 } else { 70 }));
                         now = el.frame().unwrap_or(now);
                     }
                 }
