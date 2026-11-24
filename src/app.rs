@@ -172,6 +172,14 @@ fn default_name(g: &Group) -> String {
     names.join(" + ")
 }
 
+/// The whole display below the menu bar. (Under the translucent menu bar, anything we draw
+/// while resizing would shine through it.)
+fn full_region() -> Rect {
+    let d = ax::main_display_bounds();
+    let top = primary_visible().y.max(d.y);
+    Rect { y: top, h: d.bottom() - top, ..d }
+}
+
 /// Small enough to float over a group rather than replace it.
 fn is_small(w: &Rect, region: &Rect) -> bool {
     w.w * w.h < 0.6 * region.w * region.h
@@ -256,6 +264,19 @@ impl Group {
         self.changed_at = Instant::now();
         if t >= 1.0 {
             self.glide = None;
+        }
+    }
+
+    fn set_full(&mut self, on: bool) {
+        if on == self.full {
+            return;
+        }
+        self.full = on;
+        if on {
+            self.windowed = Some(self.layout.region());
+            self.layout.set_region(full_region());
+        } else if let Some(r) = self.windowed.take() {
+            self.layout.set_region(r);
         }
     }
 
@@ -551,6 +572,8 @@ impl App {
             .groups
             .iter()
             .enumerate()
+            // only the group in use, even where another one shows around its edges
+            .filter(|(_, g)| self.active.is_none_or(|id| id == g.id))
             .filter_map(|(gi, g)| {
                 let k = g.layout.seams().iter().position(|s| {
                     let (across, along) = if s.side { (x, y) } else { (y, x) };
@@ -937,6 +960,13 @@ impl App {
             other.panes.retain(|p| g.has(*p).is_none());
             other.stack.retain(|p| g.has(p.1).is_none() || other.members.iter().any(|m| m.wid == p.1));
         }
+        // the windowed size must not be measured while the Dock is hidden
+        if let Some(r) = self.groups.iter().find(|o| o.full).map(|o| o.windowed) {
+            if let Some(r) = r {
+                g.layout.set_region(r);
+            }
+            g.set_full(true);
+        }
         g.name = default_name(&g);
         g.id = self.next_id;
         g.used = self.last.map_or(0, |l| l.1);
@@ -1174,30 +1204,25 @@ fn activate(pid: i32, win: &Elem) {
     }
 }
 
-pub fn toggle_full(id: Option<u32>) -> String {
+/// Full screen is for all groups at once: the Dock it hides is system-wide.
+pub fn toggle_full() -> String {
     with(|a| {
-        let Some(i) = pick(a, id) else { return "No group".to_string() };
-        if !a.groups[i].full {
-            if a.saved.is_none() {
-                a.saved = Some(chrome::enter());
-            }
-            let g = &mut a.groups[i];
-            g.windowed = Some(g.layout.region());
-            g.full = true;
-            g.layout.set_region(ax::main_display_bounds());
-            g.place();
-            schedule(0.9, 0.0, reapply_cb);
-            "Full screen on".into()
-        } else {
-            let g = &mut a.groups[i];
-            g.full = false;
-            if let Some(r) = g.windowed.take() {
-                g.layout.set_region(r);
-                g.place();
-            }
-            a.leave_chrome_if_idle();
-            "Full screen off".into()
+        let on = !a.groups.iter().any(|g| g.full);
+        let order = ax::window_order();
+        if on && a.saved.is_none() {
+            a.saved = Some(chrome::enter());
         }
+        for g in &mut a.groups {
+            g.set_full(on);
+            g.place_smoothly(&order, None);
+        }
+        a.drag = None;
+        if on {
+            schedule(0.9, 0.0, reapply_cb);
+        } else {
+            a.leave_chrome_if_idle();
+        }
+        if on { "Full screen on".into() } else { "Full screen off".into() }
     })
 }
 
@@ -1233,7 +1258,7 @@ fn schedule(delay: f64, interval: f64, f: TimerFn) {
 extern "C" fn reapply_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
     with(|a| {
         for g in a.groups.iter_mut().filter(|g| g.full) {
-            g.layout.set_region(ax::main_display_bounds());
+            g.layout.set_region(full_region());
             g.expected.clear();
             g.place();
         }
@@ -1334,7 +1359,6 @@ pub struct MenuGroup {
     pub name: String,
     pub tiles: Vec<Tile>,
     pub active: bool,
-    pub full: bool,
 }
 
 pub struct MenuWindow {
@@ -1345,6 +1369,7 @@ pub struct MenuWindow {
 }
 
 pub struct MenuModel {
+    pub full: bool,
     pub trusted: bool,
     /// The windows "Tile" would take, left to right, if it can.
     pub preview: Option<Vec<Tile>>,
@@ -1393,10 +1418,10 @@ pub fn menu_model() -> MenuModel {
                 name: g.name.clone(),
                 tiles: g.members.iter().map(|m| Tile { pid: m.pid, wid: m.wid }).collect(),
                 active: a.active == Some(g.id),
-                full: g.full,
             })
             .collect();
-        MenuModel { trusted, preview, all_grouped: free.is_empty() && !seen.is_empty(), groups, windows }
+        let full = a.groups.iter().any(|g| g.full);
+        MenuModel { full, trusted, preview, all_grouped: free.is_empty() && !seen.is_empty(), groups, windows }
     })
 }
 

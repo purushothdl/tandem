@@ -31,7 +31,7 @@ fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
         "--restore" => {
-            println!("{}", if chrome::restore_from_file() { "Dock and menu bar restored" } else { "Nothing to restore" });
+            println!("{}", if chrome::restore_from_file() { "Dock restored" } else { "Nothing to restore" });
             return;
         }
         "--check" => {

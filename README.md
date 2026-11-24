@@ -43,13 +43,13 @@ Other window tools (Pane, Rectangle) also react to window drags. Quit them if a 
 
 ## If something goes wrong
 
-- Dock or menu bar stuck hidden after a crash: `target/wingroup.app/Contents/MacOS/wingroup --restore`
+- Dock stuck hidden after a crash: `target/wingroup.app/Contents/MacOS/wingroup --restore`
 - Check permission and window access: `target/wingroup.app/Contents/MacOS/wingroup --check`
 
 ## Limits (v1)
 
 - Primary display only.
 - Mission Control still shows each window separately; macOS has no API to merge them, so groups are labelled instead.
-- Full mode hides the menu bar through an undocumented preference and a SystemUIServer restart: treat it as experimental.
+- Full screen fills the display below the menu bar. The Dock setting is system-wide, so it stays hidden until no group is full screen.
 - Uses the private `_AXUIElementGetWindow` call, which could break in a macOS update.
 - Slow-redrawing apps (Electron) may lag while the seam is dragged.
