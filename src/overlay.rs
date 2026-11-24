@@ -3,9 +3,9 @@
 
 use crate::app::{self, GroupView};
 use crate::layout::{Rect, Seam};
+use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSFloatingWindowLevel, NSNormalWindowLevel, NSPanel, NSScreen, NSView,
     NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
@@ -148,10 +148,10 @@ pub fn refresh_at(mx: f64, my: f64) {
             if want == o.bar_shown {
                 continue;
             }
-            if let Some((k, _)) = o.bar_shown {
-                if want.map(|w| w.0) != Some(k) {
-                    o.bars[k].orderOut(None::<&AnyObject>);
-                }
+            if let Some((k, _)) = o.bar_shown
+                && want.map(|w| w.0) != Some(k)
+            {
+                o.bars[k].orderOut(None::<&AnyObject>);
             }
             if let Some((k, r)) = want {
                 o.bars[k].setFrame_display(cocoa(r, h), true);

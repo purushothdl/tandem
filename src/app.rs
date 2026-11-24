@@ -6,13 +6,13 @@
 
 use crate::ax::{self, Elem, Observer, RawElem, WinInfo};
 use crate::chrome;
-use crate::layout::{presets, Layout, Preset, Rect, Seam};
+use crate::layout::{Layout, Preset, Rect, Seam, presets};
 use crate::writer;
 use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
 use core_foundation_sys::date::CFAbsoluteTimeGetCurrent;
 use core_foundation_sys::runloop::{
-    kCFRunLoopCommonModes, CFRunLoopAddTimer, CFRunLoopGetMain, CFRunLoopTimerCreate, CFRunLoopTimerRef,
+    CFRunLoopAddTimer, CFRunLoopGetMain, CFRunLoopTimerCreate, CFRunLoopTimerRef, kCFRunLoopCommonModes,
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSEvent, NSRunningApplication, NSScreen, NSWorkspace};
@@ -303,11 +303,11 @@ impl Group {
             let (a, b) = (&frames[*a], &frames[*b]);
             (a.x + a.w / 4.0).total_cmp(&(b.x + b.w / 4.0)).then(a.y.total_cmp(&b.y))
         });
-        if p.main {
-            if let Some(u) = self.has(self.used) {
-                ids.retain(|i| *i != u);
-                ids.insert(0, u);
-            }
+        if p.main
+            && let Some(u) = self.has(self.used)
+        {
+            ids.retain(|i| *i != u);
+            ids.insert(0, u);
         }
         let mut rects = vec![Rect::default(); ids.len()];
         for (slot, i) in ids.into_iter().enumerate() {
@@ -360,7 +360,8 @@ impl Group {
             }
         }
         if off {
-            let seen: Vec<Option<Rect>> = self.members.iter().map(|m| order.iter().find(|w| w.id == m.wid).map(|w| w.bounds)).collect();
+            let seen: Vec<Option<Rect>> =
+                self.members.iter().map(|m| order.iter().find(|w| w.id == m.wid).map(|w| w.bounds)).collect();
             self.place_smoothly(order, None);
             for ((m, s), exp) in self.members.iter_mut().zip(seen).zip(&self.expected) {
                 m.stuck_at = s.filter(|b| !b.near(exp));
@@ -444,10 +445,10 @@ impl Group {
         let panes = want.iter().any(|w| self.has(w.1).is_none());
         let elem = |wid: u32| self.members.iter().find(|m| m.wid == wid).map(|m| writer::SendElem(m.elem.clone()));
         let up = |e: Option<writer::SendElem>, pid: i32, wid: u32| {
-            if let Some(e) = e.map(|e| e.0).or_else(|| ax::find_window(pid, wid)) {
-                if !e.is_minimized() {
-                    e.raise();
-                }
+            if let Some(e) = e.map(|e| e.0).or_else(|| ax::find_window(pid, wid))
+                && !e.is_minimized()
+            {
+                e.raise();
             }
         };
         let list: Vec<_> = want.iter().rev().map(|&(pid, wid)| (elem(wid), pid, wid)).collect();
@@ -522,9 +523,12 @@ impl App {
     }
 
     fn window_closed(&mut self, el: &Elem) {
-        let Some((gi, mi)) = self.groups.iter().enumerate().find_map(|(gi, g)| {
-            g.members.iter().position(|m| m.elem.same(el)).map(|mi| (gi, mi))
-        }) else {
+        let Some((gi, mi)) = self
+            .groups
+            .iter()
+            .enumerate()
+            .find_map(|(gi, g)| g.members.iter().position(|m| m.elem.same(el)).map(|mi| (gi, mi)))
+        else {
             return;
         };
         self.drop_member(gi, mi);
@@ -532,7 +536,9 @@ impl App {
 
     /// Minimised: the neighbours take the space. Back: it gets its place again.
     fn window_hidden(&mut self, el: &Elem, hidden: bool) {
-        let Some((g, mi)) = self.groups.iter_mut().find_map(|g| g.members.iter().position(|m| m.elem.same(el)).map(|mi| (g, mi))) else {
+        let Some((g, mi)) =
+            self.groups.iter_mut().find_map(|g| g.members.iter().position(|m| m.elem.same(el)).map(|mi| (g, mi)))
+        else {
             return;
         };
         if g.layout.is_hidden(mi) == hidden {
@@ -634,7 +640,12 @@ impl App {
                 }
                 if g.layout.learn_min(i, m.width, m.size) {
                     let what = if m.width { "width" } else { "height" };
-                    log(&format!("window {}: minimum {what} {}{}", m.wid, m.size, if m.sure { "" } else { " (for this drag)" }));
+                    log(&format!(
+                        "window {}: minimum {what} {}{}",
+                        m.wid,
+                        m.size,
+                        if m.sure { "" } else { " (for this drag)" }
+                    ));
                     if !g.layout.fits() {
                         log("these windows' minimum sizes do not fit together");
                     }
@@ -690,14 +701,14 @@ impl App {
 
     fn drag_to(&mut self, x: f64, y: f64) {
         self.learn();
-        if let Some((gi, k, off)) = self.drag {
-            if let Some(g) = self.groups.get_mut(gi) {
-                let Some(before) = g.layout.seams().get(k).copied() else { return };
-                g.layout.drag_seam(k, if before.side { x } else { y } - off);
-                if g.layout.seams().get(k).map(|s| s.at) != Some(before.at) {
-                    g.seam_moved_at = Some(Instant::now());
-                    g.place();
-                }
+        if let Some((gi, k, off)) = self.drag
+            && let Some(g) = self.groups.get_mut(gi)
+        {
+            let Some(before) = g.layout.seams().get(k).copied() else { return };
+            g.layout.drag_seam(k, if before.side { x } else { y } - off);
+            if g.layout.seams().get(k).map(|s| s.at) != Some(before.at) {
+                g.seam_moved_at = Some(Instant::now());
+                g.place();
             }
         }
     }
@@ -712,7 +723,10 @@ impl App {
                 // a press on one of our own dialogs is not a press on the tile behind it
                 if MODAL.load(std::sync::atomic::Ordering::Relaxed) {
                     let me = std::process::id() as i32;
-                    if ax::all_windows().iter().any(|w| w.pid == me && w.bounds.h > 60.0 && w.bounds.w > 60.0 && w.bounds.contains(x, y)) {
+                    if ax::all_windows()
+                        .iter()
+                        .any(|w| w.pid == me && w.bounds.h > 60.0 && w.bounds.w > 60.0 && w.bounds.contains(x, y))
+                    {
                         return Verdict::Pass;
                     }
                 }
@@ -847,7 +861,10 @@ impl App {
             let Some(b) = ax::window_order().iter().find(|w| w.id == p.wid).map(|w| w.bounds) else { return };
             // the window follows the pointer; a resized or still window does not
             let (dx, dy) = (b.x - p.from.x, b.y - p.from.y);
-            if dx.hypot(dy) < 8.0 || (b.right() - p.from.right()).abs() < 1.0 || (b.bottom() - p.from.bottom()).abs() < 1.0 && dy.abs() > 1.0 {
+            if dx.hypot(dy) < 8.0
+                || (b.right() - p.from.right()).abs() < 1.0
+                || (b.bottom() - p.from.bottom()).abs() < 1.0 && dy.abs() > 1.0
+            {
                 return;
             }
             p.moving = true;
@@ -956,7 +973,11 @@ impl App {
             return false;
         }
         if !g.in_place(top, &order, mc) && g.raise_rest(top, &order) {
-            log(&format!("bringing up {} for {top} at {} ms", g.name, self.verify.map_or(0, |v| v.1.elapsed().as_millis())));
+            log(&format!(
+                "bringing up {} for {top} at {} ms",
+                g.name,
+                self.verify.map_or(0, |v| v.1.elapsed().as_millis())
+            ));
         }
         true
     }
@@ -1029,7 +1050,9 @@ impl App {
 
     /// The moment another app comes to the front (Cmd-Tab, Dock), without waiting for a tick.
     fn watch_front(&mut self) {
-        let Some(pid) = NSWorkspace::sharedWorkspace().frontmostApplication().map(|a| a.processIdentifier()) else { return };
+        let Some(pid) = NSWorkspace::sharedWorkspace().frontmostApplication().map(|a| a.processIdentifier()) else {
+            return;
+        };
         if pid == self.front_pid {
             return;
         }
@@ -1101,13 +1124,13 @@ impl App {
         // windows are still growing back for a moment after Mission Control closes
         let calm = self.mc_seen.is_none_or(|t| t.elapsed() > Duration::from_millis(900));
         let front = NSWorkspace::sharedWorkspace().frontmostApplication().map(|a| a.processIdentifier());
-        if let Some(pid) = front.filter(|p| *p != std::process::id() as i32) {
-            if let Some(w) = order.iter().find(|w| w.pid == pid) {
-                let w = *w;
-                self.last = Some((pid, w.id));
-                if self.verify.is_none() {
-                    self.note_focus(&w);
-                }
+        if let Some(pid) = front.filter(|p| *p != std::process::id() as i32)
+            && let Some(w) = order.iter().find(|w| w.pid == pid)
+        {
+            let w = *w;
+            self.last = Some((pid, w.id));
+            if self.verify.is_none() {
+                self.note_focus(&w);
             }
         }
         if ax::left_button_down() || self.drag.is_some() || !calm {
@@ -1125,10 +1148,10 @@ impl App {
     }
 
     fn leave_chrome_if_idle(&mut self) {
-        if !self.groups.iter().any(|g| g.full) {
-            if let Some(s) = self.saved.take() {
-                chrome::leave(&s);
-            }
+        if !self.groups.iter().any(|g| g.full)
+            && let Some(s) = self.saved.take()
+        {
+            chrome::leave(&s);
         }
     }
 
@@ -1242,13 +1265,20 @@ pub fn snapshot(mx: f64, my: f64) -> Option<Vec<GroupView>> {
                 .map(|(gi, g)| {
                     let mine = hot.filter(|h| h.0 == gi).map(|h| h.1);
                     let over = a.press.as_ref().filter(|p| p.moving && p.group == g.id).and_then(|p| p.over);
-                    let join = a.press.as_ref().filter(|p| p.moving && p.group == g.id).and_then(|p| p.join).map(|j| j.half);
+                    let join =
+                        a.press.as_ref().filter(|p| p.moving && p.group == g.id).and_then(|p| p.join).map(|j| j.half);
                     let drop = join.or(over.and_then(|w| g.has(w)).and_then(|i| g.expected.get(i).copied()));
                     let moving = g.seam_moved_at.is_some_and(|t| t.elapsed() < Duration::from_millis(400));
                     let rear = moving
                         .then(|| ax::window_order().iter().rev().find(|w| g.has(w.id).is_some()).map(|w| w.id))
                         .flatten();
-                    GroupView { region: g.layout.region(), seams: g.layout.seams(), hot: mine, backdrop_below: rear, drop }
+                    GroupView {
+                        region: g.layout.region(),
+                        seams: g.layout.seams(),
+                        hot: mine,
+                        backdrop_below: rear,
+                        drop,
+                    }
                 })
                 .collect(),
         )
@@ -1449,7 +1479,13 @@ pub fn switch_to(id: u32) -> String {
     with(|a| {
         let Some(g) = a.groups.iter().find(|g| g.id == id) else { return "No group".into() };
         let shown = |i: usize| !g.layout.is_hidden(i);
-        let m = g.members.iter().enumerate().filter(|(i, _)| shown(*i)).max_by_key(|(_, m)| m.wid == g.used).map_or(&g.members[0], |(_, m)| m);
+        let m = g
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| shown(*i))
+            .max_by_key(|(_, m)| m.wid == g.used)
+            .map_or(&g.members[0], |(_, m)| m);
         let (pid, wid, elem) = (m.pid, m.wid, m.elem.clone());
         activate(pid, &elem);
         a.come_to(Some(id), wid);
@@ -1652,7 +1688,11 @@ pub fn start_tracking() {
     schedule(0.1, 0.016, fast_cb);
     schedule(0.1, 0.004, press_cb);
     let tap = ax::is_trusted(false) && ax::install_click_tap(mouse_tap);
-    log(if tap { "tracking started (click tap on)" } else { "tracking started (no click tap; grant Accessibility and reopen)" });
+    log(if tap {
+        "tracking started (click tap on)"
+    } else {
+        "tracking started (no click tap; grant Accessibility and reopen)"
+    });
 }
 
 // ---- names, and what Mission Control labels need ----
@@ -1663,7 +1703,14 @@ pub fn name_of(id: u32) -> Option<String> {
 }
 
 pub fn tiles_of(id: u32) -> Vec<Tile> {
-    with(|a| a.groups.iter().filter(|g| g.id == id).flat_map(|g| &g.members).map(|m| Tile { pid: m.pid, wid: m.wid }).collect())
+    with(|a| {
+        a.groups
+            .iter()
+            .filter(|g| g.id == id)
+            .flat_map(|g| &g.members)
+            .map(|m| Tile { pid: m.pid, wid: m.wid })
+            .collect()
+    })
 }
 
 pub fn rename(id: u32, name: &str) -> String {
@@ -1743,7 +1790,8 @@ pub fn menu_model() -> MenuModel {
         Vec::new()
     };
     with(|a| {
-        let free: Vec<&WinInfo> = seen.iter().filter(|w| !a.groups.iter().any(|g| g.has(w.id).is_some())).take(MAX_TILES).collect();
+        let free: Vec<&WinInfo> =
+            seen.iter().filter(|w| !a.groups.iter().any(|g| g.has(w.id).is_some())).take(MAX_TILES).collect();
         let preview = (free.len() >= 2).then(|| {
             let mut v = free.clone();
             v.sort_by(|a, b| a.bounds.x.total_cmp(&b.bounds.x).then(a.bounds.y.total_cmp(&b.bounds.y)));
@@ -1809,7 +1857,14 @@ pub fn mission_control_labels(mx: f64, my: f64) -> Option<Vec<Label>> {
             pids.dedup();
             for m in &g.members {
                 if let Some(w) = all.iter().find(|w| w.id == m.wid) {
-                    out.push(Label { wid: m.wid, at: w.bounds, hovered: top == Some(w.id), group: g.id, name: g.name.clone(), pids: pids.clone() });
+                    out.push(Label {
+                        wid: m.wid,
+                        at: w.bounds,
+                        hovered: top == Some(w.id),
+                        group: g.id,
+                        name: g.name.clone(),
+                        pids: pids.clone(),
+                    });
                 }
             }
         }
@@ -1839,10 +1894,7 @@ fn even(tiles: Vec<(Rect, i32)>) -> Vec<(Rect, i32)> {
         3 => 1..4, // the half on the left, on the right, on top
         _ => 0..1,
     };
-    let best = choices
-        .filter_map(|k| all.get(k))
-        .map(|p| assign(&tiles, &p.rects))
-        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let best = choices.filter_map(|k| all.get(k)).map(|p| assign(&tiles, &p.rects)).min_by(|a, b| a.0.total_cmp(&b.0));
     best.map_or(tiles, |b| b.1)
 }
 
@@ -1904,7 +1956,8 @@ pub fn mission_control_cards() -> Option<Overview> {
             .collect();
         cards.sort_by_key(|c| a.active != Some(c.group));
         let small = |w: &WinInfo| w.layer == 17 && w.bounds.w < d.w * 0.5;
-        let taken = order.iter().chain(all.iter().filter(|w| small(w))).filter(|w| w.pid != me).map(|w| w.bounds).collect();
+        let taken =
+            order.iter().chain(all.iter().filter(|w| small(w))).filter(|w| w.pid != me).map(|w| w.bounds).collect();
         let mut ids: Vec<u32> = order.iter().map(|w| w.id).collect();
         ids.sort_unstable();
         let area = order.iter().map(|w| w.bounds.w * w.bounds.h).sum();

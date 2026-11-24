@@ -10,11 +10,12 @@ mod overlay;
 mod writer;
 
 use menu::Handler;
+use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSImage, NSMenu, NSStatusBar, NSVariableStatusItemLength,
+    NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSImage, NSMenu, NSStatusBar,
+    NSVariableStatusItemLength,
 };
 use objc2_foundation::{NSSize, NSString};
 

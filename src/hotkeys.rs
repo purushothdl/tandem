@@ -18,9 +18,31 @@ type Handler = extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i32;
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
     fn GetApplicationEventTarget() -> *mut c_void;
-    fn InstallEventHandler(target: *mut c_void, h: Handler, n: usize, types: *const EventType, data: *mut c_void, out: *mut *mut c_void) -> i32;
-    fn RegisterEventHotKey(code: u32, mods: u32, id: HotKeyId, target: *mut c_void, opts: u32, out: *mut *mut c_void) -> i32;
-    fn GetEventParameter(e: *mut c_void, name: u32, ty: u32, actual: *mut u32, size: usize, actual_size: *mut usize, data: *mut c_void) -> i32;
+    fn InstallEventHandler(
+        target: *mut c_void,
+        h: Handler,
+        n: usize,
+        types: *const EventType,
+        data: *mut c_void,
+        out: *mut *mut c_void,
+    ) -> i32;
+    fn RegisterEventHotKey(
+        code: u32,
+        mods: u32,
+        id: HotKeyId,
+        target: *mut c_void,
+        opts: u32,
+        out: *mut *mut c_void,
+    ) -> i32;
+    fn GetEventParameter(
+        e: *mut c_void,
+        name: u32,
+        ty: u32,
+        actual: *mut u32,
+        size: usize,
+        actual_size: *mut usize,
+        data: *mut c_void,
+    ) -> i32;
 }
 
 const fn four(s: &[u8; 4]) -> u32 {
@@ -58,7 +80,14 @@ pub fn install() {
         InstallEventHandler(target, pressed, 1, &ty, std::ptr::null_mut(), std::ptr::null_mut());
         for (id, code) in [(1, 17u32), (2, 37)] {
             let mut out = std::ptr::null_mut();
-            let err = RegisterEventHotKey(code, CONTROL_OPTION, HotKeyId { signature: four(b"wgrp"), id }, target, 0, &mut out);
+            let err = RegisterEventHotKey(
+                code,
+                CONTROL_OPTION,
+                HotKeyId { signature: four(b"wgrp"), id },
+                target,
+                0,
+                &mut out,
+            );
             if err != 0 {
                 crate::app::log(&format!("shortcut {id} is taken by another app"));
             }

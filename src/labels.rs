@@ -3,12 +3,12 @@
 
 use crate::app::{self, Label};
 use crate::layout::Rect;
+use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSFont, NSImageView, NSPanel, NSRunningApplication, NSScreenSaverWindowLevel, NSTextField,
-    NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSBackingStoreType, NSColor, NSFont, NSImageView, NSPanel, NSRunningApplication, NSScreenSaverWindowLevel,
+    NSTextField, NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::cell::{Cell, RefCell};

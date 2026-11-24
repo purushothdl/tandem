@@ -3,12 +3,14 @@
 use crate::app::{self, MenuGroup, MenuWindow, Tile};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, Sel};
-use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, Message, MainThreadMarker, MainThreadOnly};
+use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAppearanceCustomization, NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton, NSColor, NSControlSize,
-    NSEvent, NSEventModifierFlags, NSFloatingWindowLevel, NSFont, NSImage,
-    NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSRunningApplication, NSScrollView, NSScroller, NSScrollerPart, NSScrollerStyle,
-    NSStatusBarButton, NSTextField, NSTextFieldBezelStyle, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
+    NSAppearanceCustomization, NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSButton,
+    NSColor, NSControlSize, NSEvent, NSEventModifierFlags, NSFloatingWindowLevel, NSFont, NSImage,
+    NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel,
+    NSRunningApplication, NSScrollView, NSScroller, NSScrollerPart, NSScrollerStyle, NSStatusBarButton, NSTextField,
+    NSTextFieldBezelStyle, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowButton, NSWindowStyleMask,
+    NSWindowTitleVisibility, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURL};
 use std::cell::{Cell, RefCell};
@@ -181,7 +183,14 @@ impl Handler {
             }
             None => {
                 let i = self.item("Tile Windows", "rectangle.split.2x1", None, 0);
-                subtitle(&i, if m.all_grouped { "Everything in view is already grouped" } else { "Place two or more windows side by side first" });
+                subtitle(
+                    &i,
+                    if m.all_grouped {
+                        "Everything in view is already grouped"
+                    } else {
+                        "Place two or more windows side by side first"
+                    },
+                );
                 menu.addItem(&i);
             }
         }
@@ -253,7 +262,11 @@ impl Handler {
 
         // solid, so it looks the same over anything
         let dark = panel.effectiveAppearance().name().to_string().contains("Dark");
-        let bg = if dark { NSColor::colorWithSRGBRed_green_blue_alpha(0.165, 0.169, 0.188, 1.0) } else { NSColor::whiteColor() };
+        let bg = if dark {
+            NSColor::colorWithSRGBRed_green_blue_alpha(0.165, 0.169, 0.188, 1.0)
+        } else {
+            NSColor::whiteColor()
+        };
         panel.setBackgroundColor(Some(&bg));
         let view = NSView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, w, h));
 
@@ -265,7 +278,9 @@ impl Handler {
         view.addSubview(&l);
 
         let button = |t: &str, action: Sel, key: &str, x: f64, bw: f64| {
-            let b = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str(t), Some(self), Some(action), mtm) };
+            let b = unsafe {
+                NSButton::buttonWithTitle_target_action(&NSString::from_str(t), Some(self), Some(action), mtm)
+            };
             b.setControlSize(NSControlSize::Large);
             b.setFrame(frame(x, 22.0, bw, 34.0));
             b.setKeyEquivalent(&NSString::from_str(key));
@@ -315,7 +330,8 @@ impl Handler {
         scroll.setDrawsBackground(false);
         scroll.setHasVerticalScroller(content_h > list_h);
         scroll.setAutohidesScrollers(true);
-        let bar: Retained<SlimScroller> = unsafe { msg_send![mtm.alloc::<SlimScroller>(), initWithFrame: frame(0.0, 0.0, 10.0, list_h)] };
+        let bar: Retained<SlimScroller> =
+            unsafe { msg_send![mtm.alloc::<SlimScroller>(), initWithFrame: frame(0.0, 0.0, 10.0, list_h)] };
         bar.setScrollerStyle(NSScrollerStyle::Legacy);
         scroll.setVerticalScroller(Some(&bar));
         scroll.setScrollerStyle(NSScrollerStyle::Legacy);
@@ -333,7 +349,14 @@ impl Handler {
         let Some(now) = app::name_of(id) else { return };
         let mtm = self.mtm();
         const W: f64 = 380.0;
-        let d = self.dialog(W, HEAD + 120.0 + FOOT, "Rename Group", "The name appears in Mission Control and the menu.", "Rename", sel!(renameDone:));
+        let d = self.dialog(
+            W,
+            HEAD + 120.0 + FOOT,
+            "Rename Group",
+            "The name appears in Mission Control and the menu.",
+            "Rename",
+            sel!(renameDone:),
+        );
         let img = icons(mtm, &app::tiles_of(id), 44.0);
         let size = img.size();
         let iv = NSImageView::imageViewWithImage(&img, mtm);
@@ -398,10 +421,10 @@ impl Handler {
         for t in &g.tiles {
             let mut name = app::app_name(t.pid);
             // two windows of one app need telling apart
-            if g.tiles.iter().filter(|o| o.pid == t.pid).count() > 1 {
-                if let Some(title) = windows.iter().find(|w| w.wid == t.wid).map(|w| &w.title).filter(|t| !t.is_empty()) {
-                    name = format!("{name} — {}", short(title, 30));
-                }
+            if g.tiles.iter().filter(|o| o.pid == t.pid).count() > 1
+                && let Some(title) = windows.iter().find(|w| w.wid == t.wid).map(|w| &w.title).filter(|t| !t.is_empty())
+            {
+                name = format!("{name} — {}", short(title, 30));
             }
             let i = self.item(&name, "", Some(sel!(removeWindow:)), t.wid);
             i.setImage(icon(t.pid, 18.0).map(|g| padded(mtm, &g, false)).as_deref());
@@ -573,7 +596,14 @@ define_class!(
 );
 
 impl LayoutThumb {
-    fn new(mtm: MainThreadMarker, r: NSRect, group: u32, index: usize, l: &app::LayoutChoice, owner: &Handler) -> Retained<Self> {
+    fn new(
+        mtm: MainThreadMarker,
+        r: NSRect,
+        group: u32,
+        index: usize,
+        l: &app::LayoutChoice,
+        owner: &Handler,
+    ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(ThumbIvars {
             group,
             index,
@@ -592,7 +622,9 @@ impl LayoutThumb {
             NSTrackingArea::initWithRect_options_owner_userInfo(
                 NSTrackingArea::alloc(),
                 NSRect::ZERO,
-                NSTrackingAreaOptions::MouseEnteredAndExited | NSTrackingAreaOptions::ActiveAlways | NSTrackingAreaOptions::InVisibleRect,
+                NSTrackingAreaOptions::MouseEnteredAndExited
+                    | NSTrackingAreaOptions::ActiveAlways
+                    | NSTrackingAreaOptions::InVisibleRect,
                 Some(&v),
                 None,
             )
@@ -636,11 +668,10 @@ define_class!(
         }
         #[unsafe(method(mouseEntered:))]
         fn entered(&self, _e: &NSEvent) {
-            if let Some(i) = self.enclosingMenuItem() {
-                if let Some(menu) = unsafe { i.menu() } {
+            if let Some(i) = self.enclosingMenuItem()
+                && let Some(menu) = unsafe { i.menu() } {
                     light(&menu, Some(&i));
                 }
-            }
         }
         #[unsafe(method(mouseExited:))]
         fn exited(&self, _e: &NSEvent) {
@@ -693,7 +724,10 @@ impl GroupRow {
             l.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         }
         let more = NSImageView::initWithFrame(mtm.alloc(), frame(w - MORE_W - 5.0, (h - 20.0) / 2.0, 28.0, 20.0));
-        more.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("chevron.right"), None).as_deref());
+        more.setImage(
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("chevron.right"), None)
+                .as_deref(),
+        );
         more.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
 
         let this = Self::alloc(mtm).set_ivars(GroupRowIvars {
@@ -863,7 +897,9 @@ impl Row {
             NSTrackingArea::initWithRect_options_owner_userInfo(
                 NSTrackingArea::alloc(),
                 NSRect::ZERO,
-                NSTrackingAreaOptions::MouseEnteredAndExited | NSTrackingAreaOptions::ActiveAlways | NSTrackingAreaOptions::InVisibleRect,
+                NSTrackingAreaOptions::MouseEnteredAndExited
+                    | NSTrackingAreaOptions::ActiveAlways
+                    | NSTrackingAreaOptions::InVisibleRect,
                 Some(&v),
                 None,
             )

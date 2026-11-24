@@ -4,7 +4,7 @@ use crate::layout::Rect;
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopSource, CFRunLoopSourceRef};
+use core_foundation::runloop::{CFRunLoop, CFRunLoopSource, CFRunLoopSourceRef, kCFRunLoopCommonModes};
 use core_foundation::string::{CFString, CFStringRef};
 use std::ffi::c_void;
 
@@ -77,7 +77,8 @@ unsafe extern "C" {
     fn CGEventGetIntegerValueField(event: *mut c_void, field: u32) -> i64;
 }
 
-pub type TapCallback = extern "C" fn(proxy: *mut c_void, kind: u32, event: *mut c_void, info: *mut c_void) -> *mut c_void;
+pub type TapCallback =
+    extern "C" fn(proxy: *mut c_void, kind: u32, event: *mut c_void, info: *mut c_void) -> *mut c_void;
 
 static TAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -154,7 +155,7 @@ pub fn all_windows() -> Vec<WinInfo> {
     use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex};
     use core_foundation_sys::base::CFRelease;
     use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
-    use core_foundation_sys::number::{kCFNumberDoubleType, CFNumberGetValue, CFNumberRef};
+    use core_foundation_sys::number::{CFNumberGetValue, CFNumberRef, kCFNumberDoubleType};
 
     fn num(d: CFDictionaryRef, key: &str) -> Option<f64> {
         let k = CFString::new(key);
@@ -163,7 +164,8 @@ pub fn all_windows() -> Vec<WinInfo> {
             return None;
         }
         let mut out = 0f64;
-        unsafe { CFNumberGetValue(v as CFNumberRef, kCFNumberDoubleType, &mut out as *mut f64 as *mut c_void) }.then_some(out)
+        unsafe { CFNumberGetValue(v as CFNumberRef, kCFNumberDoubleType, &mut out as *mut f64 as *mut c_void) }
+            .then_some(out)
     }
 
     let mut out = Vec::new();
@@ -317,16 +319,15 @@ impl Elem {
 
     /// A normal document window, not a dialog, palette or sheet.
     pub fn is_standard_window(&self) -> bool {
-        self.attr("AXSubrole")
-            .and_then(|v| v.downcast::<CFString>())
-            .is_some_and(|v| v == "AXStandardWindow")
+        self.attr("AXSubrole").and_then(|v| v.downcast::<CFString>()).is_some_and(|v| v == "AXStandardWindow")
     }
 
     pub fn frame(&self) -> Option<Rect> {
         use core_foundation::array::CFArray;
         let names = CFArray::from_CFTypes(&[CFString::new("AXPosition"), CFString::new("AXSize")]);
         let mut out: core_foundation_sys::array::CFArrayRef = std::ptr::null();
-        let err = unsafe { AXUIElementCopyMultipleAttributeValues(self.raw(), names.as_concrete_TypeRef(), 0, &mut out) };
+        let err =
+            unsafe { AXUIElementCopyMultipleAttributeValues(self.raw(), names.as_concrete_TypeRef(), 0, &mut out) };
         if err != 0 || out.is_null() {
             return None;
         }
@@ -379,10 +380,12 @@ pub fn find_window(pid: i32, wid: u32) -> Option<Elem> {
     app.set_timeout(0.4);
     let list = app.attr("AXWindows")?;
     let arr = unsafe {
-        core_foundation::array::CFArray::<CFType>::wrap_under_get_rule(list.as_CFTypeRef() as core_foundation_sys::array::CFArrayRef)
+        core_foundation::array::CFArray::<CFType>::wrap_under_get_rule(
+            list.as_CFTypeRef() as core_foundation_sys::array::CFArrayRef
+        )
     };
-    let found = arr.iter().map(|w| Elem((*w).clone())).find(|w| w.window_id() == Some(wid));
-    found
+
+    arr.iter().map(|w| Elem((*w).clone())).find(|w| w.window_id() == Some(wid))
 }
 
 pub struct Observer(CFType);
@@ -401,6 +404,9 @@ impl Observer {
 
     pub fn add(&self, el: &Elem, notif: &str) -> bool {
         let n = CFString::new(notif);
-        unsafe { AXObserverAddNotification(self.0.as_CFTypeRef(), el.raw(), n.as_concrete_TypeRef(), std::ptr::null_mut()) == 0 }
+        unsafe {
+            AXObserverAddNotification(self.0.as_CFTypeRef(), el.raw(), n.as_concrete_TypeRef(), std::ptr::null_mut())
+                == 0
+        }
     }
 }

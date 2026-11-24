@@ -27,17 +27,12 @@ fn set_dock(hide: bool) {
 }
 
 pub fn enter() -> Saved {
-    let saved = Saved {
-        dock_autohide: run("osascript", &["-e", DOCK_GET]).as_deref() == Some("true"),
-    };
+    let saved = Saved { dock_autohide: run("osascript", &["-e", DOCK_GET]).as_deref() == Some("true") };
     let path = state_file();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(
-        &path,
-        format!("dock={}\n", saved.dock_autohide),
-    );
+    let _ = std::fs::write(&path, format!("dock={}\n", saved.dock_autohide));
     set_dock(true);
     saved
 }

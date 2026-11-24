@@ -3,8 +3,8 @@
 
 use crate::ax::Elem;
 use crate::layout::Rect;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 /// A size an app would not go below, waiting for the main thread.

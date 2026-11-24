@@ -12,8 +12,8 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameVibrantDark, NSColor, NSEvent, NSFont, NSFontWeightMedium,
-    NSFontWeightSemibold, NSImageScaling, NSImageView, NSLineBreakMode, NSPanel, NSRunningApplication, NSScreen, NSTextField, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSFontWeightSemibold, NSImageScaling, NSImageView, NSLineBreakMode, NSPanel, NSRunningApplication, NSScreen,
+    NSTextField, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
 };
 use objc2_foundation::NSString;
 use std::cell::RefCell;
@@ -190,7 +190,8 @@ fn entry(mtm: MainThreadMarker, z: Size, c: &Card, x: f64, max_name: f64, first:
 
 fn build(mtm: MainThreadMarker, z: Size, cards: Vec<Card>, screen_w: f64) -> Bar {
     let each = (screen_w - 80.0) / cards.len().max(1) as f64;
-    let max_name = (each - 2.0 * PAD - z.pic.0 - 2.0 * GAP - if z.big { 10.0 } else { 4.0 * (ICON + 2.0) }).clamp(0.0, 160.0);
+    let max_name =
+        (each - 2.0 * PAD - z.pic.0 - 2.0 * GAP - if z.big { 10.0 } else { 4.0 * (ICON + 2.0) }).clamp(0.0, 160.0);
     let mut entries: Vec<Entry> = Vec::new();
     let mut x = z.inset;
     for (i, c) in cards.iter().enumerate() {
@@ -289,7 +290,7 @@ fn columns(w: f64, screen_w: f64, taken: &[Rect]) -> Vec<f64> {
     xs
 }
 
-fn in_column<'a>(x: f64, w: f64, taken: &'a [Rect]) -> impl Iterator<Item = &'a Rect> {
+fn in_column(x: f64, w: f64, taken: &[Rect]) -> impl Iterator<Item = &Rect> {
     taken.iter().filter(move |t| t.x < x + w + CLEAR - 0.5 && t.right() > x - CLEAR + 0.5)
 }
 

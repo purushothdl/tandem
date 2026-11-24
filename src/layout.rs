@@ -64,7 +64,12 @@ impl Rect {
 enum Node {
     Leaf(usize),
     /// `side`: a and b are side by side (a vertical seam); otherwise a is above b.
-    Split { side: bool, at: f64, a: Box<Node>, b: Box<Node> },
+    Split {
+        side: bool,
+        at: f64,
+        a: Box<Node>,
+        b: Box<Node>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,12 +92,33 @@ pub struct Preset {
 pub fn presets(n: usize) -> Vec<Preset> {
     let r = |x: f64, y: f64, w: f64, h: f64| Rect { x, y, w, h };
     let even = |n: usize, i: usize| (i as f64 / n as f64, 1.0 / n as f64);
-    let columns = || Preset { main: false, rects: (0..n).map(|i| { let (a, s) = even(n, i); r(a, 0.0, s, 1.0) }).collect() };
-    let rows = || Preset { main: false, rects: (0..n).map(|i| { let (a, s) = even(n, i); r(0.0, a, 1.0, s) }).collect() };
+    let columns = || Preset {
+        main: false,
+        rects: (0..n)
+            .map(|i| {
+                let (a, s) = even(n, i);
+                r(a, 0.0, s, 1.0)
+            })
+            .collect(),
+    };
+    let rows = || Preset {
+        main: false,
+        rects: (0..n)
+            .map(|i| {
+                let (a, s) = even(n, i);
+                r(0.0, a, 1.0, s)
+            })
+            .collect(),
+    };
     // one big, the rest sharing the other half
     let big = |first: Rect, rest: &dyn Fn(f64, f64) -> Rect| Preset {
         main: true,
-        rects: std::iter::once(first).chain((0..n - 1).map(|i| { let (a, s) = even(n - 1, i); rest(a, s) })).collect(),
+        rects: std::iter::once(first)
+            .chain((0..n - 1).map(|i| {
+                let (a, s) = even(n - 1, i);
+                rest(a, s)
+            }))
+            .collect(),
     };
     let left = || big(r(0.0, 0.0, 0.5, 1.0), &|a, s| r(0.5, a, 0.5, s));
     let right = || big(r(0.5, 0.0, 0.5, 1.0), &|a, s| r(0.0, a, 0.5, s));
@@ -193,7 +219,12 @@ impl Layout {
         let b = rects.iter().map(|r| r.bottom()).fold(f64::MIN, f64::max);
         let bounds = Rect { x, y, w: (r - x).max(1.0), h: (b - y).max(1.0) };
         let all: Vec<usize> = (0..rects.len()).collect();
-        let mut l = Layout { region: bounds, root: build(&all, rects), mins: vec![(MIN_W, MIN_H); rects.len()], hidden: vec![false; rects.len()] };
+        let mut l = Layout {
+            region: bounds,
+            root: build(&all, rects),
+            mins: vec![(MIN_W, MIN_H); rects.len()],
+            hidden: vec![false; rects.len()],
+        };
         l.set_region(region);
         l.snap();
         l
@@ -307,10 +338,8 @@ impl Layout {
 
     /// The same windows in another shape (`rects`: parts of a whole, per window).
     pub fn rearranged(&self, rects: &[Rect]) -> Layout {
-        let scaled: Vec<Rect> = rects
-            .iter()
-            .map(|r| Rect { x: r.x * 6000.0, y: r.y * 6000.0, w: r.w * 6000.0, h: r.h * 6000.0 })
-            .collect();
+        let scaled: Vec<Rect> =
+            rects.iter().map(|r| Rect { x: r.x * 6000.0, y: r.y * 6000.0, w: r.w * 6000.0, h: r.h * 6000.0 }).collect();
         let mut l = Layout::from_rects(self.region, &scaled);
         l.mins = self.mins.clone();
         l.hidden = self.hidden.clone();
@@ -320,7 +349,8 @@ impl Layout {
 
     /// Do the minimum sizes fit in the region at all?
     pub fn fits(&self) -> bool {
-        need(&self.root, true, &self.mins, &self.hidden) <= self.region.w && need(&self.root, false, &self.mins, &self.hidden) <= self.region.h
+        need(&self.root, true, &self.mins, &self.hidden) <= self.region.w
+            && need(&self.root, false, &self.mins, &self.hidden) <= self.region.h
     }
 
     /// Move the group to a new region, keeping every proportion.
@@ -464,7 +494,13 @@ fn parts(r: Rect, side: bool, at: f64, a: &Node, b: &Node, hidden: &[bool]) -> (
 fn need(n: &Node, width: bool, mins: &[(f64, f64)], hidden: &[bool]) -> f64 {
     match n {
         Node::Leaf(i) if hidden[*i] => 0.0,
-        Node::Leaf(i) => if width { mins[*i].0 } else { mins[*i].1 },
+        Node::Leaf(i) => {
+            if width {
+                mins[*i].0
+            } else {
+                mins[*i].1
+            }
+        }
         Node::Split { side, a, b, .. } => {
             let (x, y) = (need(a, width, mins, hidden), need(b, width, mins, hidden));
             if *side == width { x + y } else { x.max(y) }
@@ -486,7 +522,8 @@ fn build(ids: &[usize], rects: &[Rect]) -> Node {
             let (a, b) = sorted.split_at(k);
             let a_end = a.iter().map(|i| rects[*i].hi(side)).fold(f64::MIN, f64::max);
             let b_start = b.iter().map(|i| rects[*i].lo(side)).fold(f64::MAX, f64::min);
-            let smallest = ids.iter().map(|i| rects[*i].hi(side) - rects[*i].lo(side)).fold(f64::MAX, f64::min).max(1.0);
+            let smallest =
+                ids.iter().map(|i| rects[*i].hi(side) - rects[*i].lo(side)).fold(f64::MAX, f64::min).max(1.0);
             let overlap = ((a_end - b_start) / smallest).max(0.0);
             if best.as_ref().is_none_or(|x| overlap < x.0 - 0.02) {
                 best = Some((overlap, side, (a_end + b_start) / 2.0, a.to_vec(), b.to_vec()));
@@ -510,7 +547,10 @@ mod tests {
         Layout::from_rects(R, &[r(0.0, 30.0, 490.0, 600.0), r(510.0, 30.0, 490.0, 600.0)])
     }
     fn half_and_stack() -> Layout {
-        Layout::from_rects(R, &[r(0.0, 30.0, 500.0, 600.0), r(500.0, 30.0, 500.0, 300.0), r(500.0, 330.0, 500.0, 300.0)])
+        Layout::from_rects(
+            R,
+            &[r(0.0, 30.0, 500.0, 600.0), r(500.0, 30.0, 500.0, 300.0), r(500.0, 330.0, 500.0, 300.0)],
+        )
     }
 
     fn covers(l: &Layout) {
@@ -529,13 +569,19 @@ mod tests {
     #[test]
     fn half_plus_two_stacked_keeps_its_shape() {
         let l = half_and_stack();
-        assert_eq!(l.frames(), vec![r(0.0, 30.0, 500.0, 600.0), r(500.0, 30.0, 500.0, 300.0), r(500.0, 330.0, 500.0, 300.0)]);
+        assert_eq!(
+            l.frames(),
+            vec![r(0.0, 30.0, 500.0, 600.0), r(500.0, 30.0, 500.0, 300.0), r(500.0, 330.0, 500.0, 300.0)]
+        );
         assert_eq!(l.seams().len(), 2);
     }
 
     #[test]
     fn stack_on_the_left_and_sloppy_placement() {
-        let l = Layout::from_rects(R, &[r(8.0, 36.0, 470.0, 280.0), r(3.0, 340.0, 505.0, 285.0), r(495.0, 33.0, 500.0, 590.0)]);
+        let l = Layout::from_rects(
+            R,
+            &[r(8.0, 36.0, 470.0, 280.0), r(3.0, 340.0, 505.0, 285.0), r(495.0, 33.0, 500.0, 590.0)],
+        );
         let f = l.frames();
         assert_eq!(f[0].w, f[1].w);
         assert_eq!((f[2].y, f[2].h), (30.0, 600.0));
@@ -545,11 +591,15 @@ mod tests {
 
     #[test]
     fn two_by_two_and_rows_and_wide_top() {
-        let q = Layout::from_rects(R, &[r(0.0, 0.0, 50.0, 50.0), r(50.0, 0.0, 50.0, 50.0), r(0.0, 50.0, 50.0, 50.0), r(50.0, 50.0, 50.0, 50.0)]);
+        let q = Layout::from_rects(
+            R,
+            &[r(0.0, 0.0, 50.0, 50.0), r(50.0, 0.0, 50.0, 50.0), r(0.0, 50.0, 50.0, 50.0), r(50.0, 50.0, 50.0, 50.0)],
+        );
         assert!(q.frames().iter().all(|f| f.w == 500.0 && f.h == 300.0));
         let rows = Layout::from_rects(R, &[r(0.0, 0.0, 100.0, 30.0), r(0.0, 30.0, 100.0, 70.0)]);
         assert_eq!(rows.frames()[0], r(0.0, 30.0, 1000.0, 180.0));
-        let top = Layout::from_rects(R, &[r(0.0, 0.0, 100.0, 50.0), r(0.0, 50.0, 50.0, 50.0), r(50.0, 50.0, 50.0, 50.0)]);
+        let top =
+            Layout::from_rects(R, &[r(0.0, 0.0, 100.0, 50.0), r(0.0, 50.0, 50.0, 50.0), r(50.0, 50.0, 50.0, 50.0)]);
         assert_eq!(top.frames()[0], r(0.0, 30.0, 1000.0, 300.0));
         covers(&q);
         covers(&top);
