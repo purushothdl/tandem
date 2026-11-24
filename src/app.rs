@@ -1371,17 +1371,6 @@ fn pick(a: &App, id: Option<u32>) -> Option<usize> {
     }
 }
 
-pub fn equalize(id: Option<u32>) -> String {
-    with(|a| match pick(a, id) {
-        Some(i) => {
-            a.groups[i].layout.equalize();
-            a.groups[i].place_smoothly(&ax::window_order(), None);
-            "Sizes evened out".into()
-        }
-        None => "No group".into(),
-    })
-}
-
 pub fn set_layout(id: u32, k: usize) -> String {
     let msg = with(|a| {
         a.drag = None;

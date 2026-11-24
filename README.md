@@ -41,7 +41,7 @@ Then:
   when you left the group, it comes back with the group. A window larger than about 60% of
   the group counts as a separate app.
 - **Mission Control**: each grouped window carries its group's icons and name.
-- Each group's own menu: **Switch To**, **Add Windows…** (splits the tile you used last), **Remove from Group**, **Even Out Sizes**, **Full Screen**, **Rename…**, **Ungroup**.
+- Each group's own menu: **Switch To**, **Add Windows…** (splits the tile you used last), **Remove from Group**, **Full Screen**, **Rename…**, **Ungroup**.
 
 Rectangle can stay on. If it also snaps a tile you drop near a screen edge, wingroup puts it back.
 

@@ -67,10 +67,6 @@ define_class!(
         fn switch_to(&self, i: &NSMenuItem) {
             self.say(app::switch_to(i.tag() as u32));
         }
-        #[unsafe(method(equalize:))]
-        fn equalize(&self, i: &NSMenuItem) {
-            self.say(app::equalize(Some(i.tag() as u32)));
-        }
         #[unsafe(method(toggleFull:))]
         fn toggle_full(&self, _s: Option<&AnyObject>) {
             self.say(app::toggle_full());
@@ -416,7 +412,6 @@ impl Handler {
         r.setSubmenu(Some(&out));
         sub.addItem(&r);
         sub.addItem(&NSMenuItem::separatorItem(mtm));
-        sub.addItem(&self.item("Even Out Sizes", "equal.square", Some(sel!(equalize:)), g.id));
         sub.addItem(&self.item("Rename…", "pencil", Some(sel!(rename:)), g.id));
         sub.addItem(&NSMenuItem::separatorItem(mtm));
         sub.addItem(&self.item("Ungroup", "rectangle.dashed", Some(sel!(ungroupOne:)), g.id));
@@ -490,15 +485,20 @@ impl SlimScroller {
     }
 }
 
-/// The layouts as a row of small pictures.
+/// The layouts as small pictures, four to a row.
 fn layout_strip(mtm: MainThreadMarker, g: &MenuGroup, owner: &Handler) -> Retained<NSView> {
     const W: f64 = 46.0;
     const H: f64 = 32.0;
     const GAP: f64 = 6.0;
-    let n = g.layouts.len() as f64;
-    let strip = NSView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, 28.0 + n * W + (n - 1.0) * GAP, H + 10.0));
+    const PER_ROW: usize = 4;
+    let rows = g.layouts.len().div_ceil(PER_ROW);
+    let cols = g.layouts.len().min(PER_ROW) as f64;
+    let h = rows as f64 * (H + GAP) - GAP + 10.0;
+    let strip = NSView::initWithFrame(mtm.alloc(), frame(0.0, 0.0, 28.0 + cols * W + (cols - 1.0) * GAP, h));
     for (k, l) in g.layouts.iter().enumerate() {
-        let t = LayoutThumb::new(mtm, frame(14.0 + k as f64 * (W + GAP), 5.0, W, H), g.id, k, l, owner);
+        let x = 14.0 + (k % PER_ROW) as f64 * (W + GAP);
+        let y = h - 5.0 - H - (k / PER_ROW) as f64 * (H + GAP);
+        let t = LayoutThumb::new(mtm, frame(x, y, W, H), g.id, k, l, owner);
         strip.addSubview(&t);
     }
     strip
