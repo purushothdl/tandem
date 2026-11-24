@@ -2,6 +2,7 @@
 name = "wingroup"
 version = "0.1.0"
 edition = "2024"
+description = "Keeps macOS windows together: tiled, resized and switched as one"
 
 [dependencies]
 core-foundation = "0.10.1"

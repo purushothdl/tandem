@@ -1,77 +1,41 @@
+//! wingroup: windows that stay together. See README.md and docs/ARCHITECTURE.md.
+
 mod app;
-mod ax;
-mod cards;
-mod chrome;
-mod hotkeys;
-mod labels;
-mod layout;
-mod menu;
-mod overlay;
-mod writer;
+mod core;
+mod platform;
+mod ui;
 
-use menu::Handler;
 use objc2::MainThreadMarker;
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSImage, NSMenu, NSStatusBar,
-    NSVariableStatusItemLength,
-};
-use objc2_foundation::{NSSize, NSString};
-
-/// The icon sits in the app bundle's Resources folder, next to MacOS/.
-fn load_menu_icon(mtm: MainThreadMarker) -> Option<Retained<NSImage>> {
-    let exe = std::env::current_exe().ok()?;
-    let path = exe.parent()?.parent()?.join("Resources/menubar.png");
-    let img = NSImage::initWithContentsOfFile(mtm.alloc::<NSImage>(), &NSString::from_str(path.to_str()?))?;
-    img.setTemplate(true);
-    img.setSize(NSSize::new(18.0, 18.0));
-    Some(img)
-}
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use platform::element::is_trusted;
+use platform::{dock, windows};
 
 fn main() {
-    let arg = std::env::args().nth(1).unwrap_or_default();
-    match arg.as_str() {
-        "--restore" => {
-            println!("{}", if chrome::restore_from_file() { "Dock restored" } else { "Nothing to restore" });
-            return;
+    match std::env::args().nth(1).as_deref() {
+        Some("--restore") => {
+            println!("{}", if dock::restore_after_crash() { "Dock restored" } else { "Nothing to restore" });
         }
-        "--check" => {
-            println!("Accessibility trusted: {}", ax::is_trusted(true));
-            println!("Windows on screen: {}", ax::window_order().len());
-            for w in app::visible_picks() {
-                println!("would tile: pid {} {:?}", w.pid, w.bounds);
-            }
-            return;
-        }
-        _ => {}
+        Some("--check") => check(),
+        _ => run(),
     }
+}
 
-    let mtm = MainThreadMarker::new().expect("main thread");
+fn check() {
+    println!("Accessibility trusted: {}", is_trusted(true));
+    println!("Windows on screen: {}", windows::ordinary().len());
+    for w in app::commands::visible_picks() {
+        println!("would tile: pid {} {:?}", w.pid, w.bounds);
+    }
+}
+
+fn run() {
+    let mtm = MainThreadMarker::new().expect("main runs on the main thread");
     let nsapp = NSApplication::sharedApplication(mtm);
-    nsapp.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    if !ax::is_trusted(true) {
+    nsapp.setActivationPolicy(NSApplicationActivationPolicy::Accessory); // no Dock icon
+    if !is_trusted(true) {
         eprintln!("wingroup needs Accessibility permission: System Settings > Privacy & Security > Accessibility");
     }
-
-    let bar = NSStatusBar::systemStatusBar();
-    let status_item = bar.statusItemWithLength(NSVariableStatusItemLength);
-    let button = status_item.button(mtm).expect("status button");
-    if let Some(img) = load_menu_icon(mtm) {
-        button.setImage(Some(&img));
-        button.setImagePosition(NSCellImagePosition::ImageLeft);
-        app::HAS_ICON.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    button.setTitle(&NSString::from_str(&app::title()));
-
-    // built fresh each time it opens, so it always shows the current windows
-    let handler = Handler::new(mtm, button.clone());
-    let menu = NSMenu::new(mtm);
-    menu.setDelegate(Some(ProtocolObject::from_ref(&*handler)));
-    status_item.setMenu(Some(&menu));
-    hotkeys::install();
-
-    app::start_tracking();
+    let _item = ui::menu::install(mtm);
+    app::run::start();
     nsapp.run();
-    drop(handler);
 }

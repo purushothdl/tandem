@@ -1,7 +1,8 @@
 //! Global shortcuts through Carbon, which needs no extra permission.
-//! Control-Option-T tiles, Control-Option-L steps through the layouts.
 
+use super::log::log;
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 #[repr(C)]
 struct HotKeyId {
@@ -49,6 +50,36 @@ const fn four(s: &[u8; 4]) -> u32 {
     u32::from_be_bytes(*s)
 }
 
+const CONTROL: u32 = 0x1000;
+const OPTION: u32 = 0x0800;
+const KEY_PRESSED: u32 = 5;
+
+/// Virtual key codes.
+pub const KEY_T: u32 = 17;
+pub const KEY_L: u32 = 37;
+
+static ACTIONS: OnceLock<Vec<fn()>> = OnceLock::new();
+
+/// Control-Option with each of these keys.
+pub fn install(shortcuts: &[(u32, fn())]) {
+    if ACTIONS.set(shortcuts.iter().map(|s| s.1).collect()).is_err() {
+        return;
+    }
+    // SAFETY: the handler and the shortcuts stay for the rest of the program.
+    unsafe {
+        let target = GetApplicationEventTarget();
+        let ty = EventType { class: four(b"keyb"), kind: KEY_PRESSED };
+        InstallEventHandler(target, pressed, 1, &ty, std::ptr::null_mut(), std::ptr::null_mut());
+        for (i, (code, _)) in shortcuts.iter().enumerate() {
+            let id = HotKeyId { signature: four(b"wgrp"), id: i as u32 };
+            let mut out = std::ptr::null_mut();
+            if RegisterEventHotKey(*code, CONTROL | OPTION, id, target, 0, &mut out) != 0 {
+                log(&format!("shortcut {i} is taken by another app"));
+            }
+        }
+    }
+}
+
 extern "C" fn pressed(_next: *mut c_void, event: *mut c_void, _data: *mut c_void) -> i32 {
     let mut id = HotKeyId { signature: 0, id: 0 };
     let err = unsafe {
@@ -62,35 +93,9 @@ extern "C" fn pressed(_next: *mut c_void, event: *mut c_void, _data: *mut c_void
             &mut id as *mut _ as *mut c_void,
         )
     };
-    if err == 0 {
-        let msg = match id.id {
-            1 => crate::app::tile_visible(),
-            _ => crate::app::next_layout(),
-        };
-        crate::app::log(&msg);
+    let action = ACTIONS.get().and_then(|a| a.get(id.id as usize));
+    if let Some(f) = action.filter(|_| err == 0) {
+        f();
     }
     0
-}
-
-pub fn install() {
-    const CONTROL_OPTION: u32 = 0x1000 | 0x0800;
-    unsafe {
-        let target = GetApplicationEventTarget();
-        let ty = EventType { class: four(b"keyb"), kind: 5 };
-        InstallEventHandler(target, pressed, 1, &ty, std::ptr::null_mut(), std::ptr::null_mut());
-        for (id, code) in [(1, 17u32), (2, 37)] {
-            let mut out = std::ptr::null_mut();
-            let err = RegisterEventHotKey(
-                code,
-                CONTROL_OPTION,
-                HotKeyId { signature: four(b"wgrp"), id },
-                target,
-                0,
-                &mut out,
-            );
-            if err != 0 {
-                crate::app::log(&format!("shortcut {id} is taken by another app"));
-            }
-        }
-    }
 }

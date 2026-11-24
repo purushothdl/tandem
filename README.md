@@ -1,61 +1,50 @@
 # wingroup
 
-Menu-bar app for macOS that makes two or more windows behave as one group.
-See [SPEC.md](SPEC.md) for the design.
+A macOS menu-bar app that keeps windows together. Put two to six windows side by side, tile
+them, and they resize, switch and go full screen as one.
+
+Written in Rust. No dependencies beyond bindings to macOS.
 
 ## Build and run
 
 ```sh
-./bundle.sh                 # builds target/wingroup.app
-open target/wingroup.app    # a ▥ icon appears in the menu bar
+./bundle.sh
+open target/wingroup.app
 ```
 
-First run: allow it in System Settings > Privacy & Security > Accessibility
-(add `target/wingroup.app` with the + button if it is not listed), then quit
-and reopen it. Rebuilding changes the app's signature, so macOS may ask again.
+Allow it in System Settings > Privacy & Security > Accessibility, then quit and reopen it.
+Rebuilding keeps the permission.
 
 ## Use
 
-1. Arrange two to six windows however you like: halves, columns, one half and two stacked, a grid.
-2. Click the menu-bar icon > **Tile These Windows**. They glide edge to edge on the main
-   display and keep that shape; near-halves, thirds and quarters become exact. Windows more
-   than half hidden are skipped, and so are windows already in a group, so you can tile
-   several groups over each other.
+| To | Do |
+|---|---|
+| Make a group | Arrange windows, then menu > **Tile** or ⌃⌥T |
+| Resize | Drag the bar between two windows; double-click evens them |
+| Swap | Drag a tile by its title bar onto another |
+| Add | Hold Shift while dragging a window onto half of a tile |
+| Change the layout | Hover the group in the menu, or ⌃⌥L |
+| Switch | Click any window of the group, Cmd-Tab, the menu, or the bar in Mission Control |
+| Everything else | The group's submenu |
 
-The menu shows a picture of what it will make. To choose exactly which windows, use
-**Choose Windows…** and tick them. Shortcut: Control-Option-T.
+A small window over a group stays with it, as in plain macOS. A large one counts as separate.
 
-Then:
+## Develop
 
-- **Resize**: drag the bar between windows (it shows on hover). It stops at each app's
-  minimum size. Double-click it to even the split.
-- **Swap**: drag a tile by its title bar onto another tile and they trade places. Dropped
-  anywhere else, or resized by another edge, it glides back.
-- **Change shape**: hover the group in the menu and pick a layout, or step through them with
-  Control-Option-L. The app used last takes the big spot.
-- **Drag a pane in**: hold Shift while dragging it onto a tile; it takes the half of the
-  tile the pointer is in.
-- **Switch**: clicking one window, Cmd-Tab or Mission Control brings its whole group.
-- **Panes**: a smaller window over the group behaves as in plain macOS: clicking a tile puts
-  that tile in front of it, clicking the other tile sends it fully behind. If it was in front
-  when you left the group, it comes back with the group. A window larger than about 60% of
-  the group counts as a separate app.
-- **Mission Control**: a bar above the thumbnails shows each group's layout, icons and name;
-  click one to open it, point at it to outline its windows. If there is no room for the bar,
-  each grouped window carries a label instead.
-- Each group's own menu: **Switch To**, **Add Windows…** (splits the tile you used last), **Remove from Group**, **Full Screen**, **Rename…**, **Ungroup**.
+```sh
+cargo test                  # pure logic, no windows involved
+cargo clippy --all-targets
+tail -f ~/Library/Logs/wingroup.log
+```
 
-Rectangle can stay on. If it also snaps a tile you drop near a screen edge, wingroup puts it back.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how it fits together
+- [docs/QUIRKS.md](docs/QUIRKS.md): macOS behaviour that shaped the code
+- [docs/READING.md](docs/READING.md): the systems ideas in it, and how to study them
 
-## If something goes wrong
+## Limits
 
-- Dock stuck hidden after a crash: `target/wingroup.app/Contents/MacOS/wingroup --restore`
-- Check permission and window access: `target/wingroup.app/Contents/MacOS/wingroup --check`
-
-## Limits (v1)
-
-- Primary display only.
-- Mission Control still shows each window separately; macOS has no API to merge them, so groups are labelled instead.
-- Full screen fills the display below the menu bar. The Dock setting is system-wide, so it stays hidden until no group is full screen.
-- Uses the private `_AXUIElementGetWindow` call, which could break in a macOS update.
-- Slow-redrawing apps (Electron) may lag while the seam is dragged.
+- Main display only.
+- macOS cannot merge windows in Mission Control, so groups get a bar above them instead.
+- Full screen stays below the menu bar, and hides the Dock for everything. If a crash leaves
+  the Dock hidden: `target/wingroup.app/Contents/MacOS/wingroup --restore`
+- Uses a few private macOS calls that an update could break.

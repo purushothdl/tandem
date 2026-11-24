@@ -26,7 +26,8 @@ fn set_dock(hide: bool) {
     run("osascript", &["-e", &script]);
 }
 
-pub fn enter() -> Saved {
+/// Hide the Dock, remembering how it was.
+pub fn hide() -> Saved {
     let saved = Saved { dock_autohide: run("osascript", &["-e", DOCK_GET]).as_deref() == Some("true") };
     let path = state_file();
     if let Some(dir) = path.parent() {
@@ -37,13 +38,13 @@ pub fn enter() -> Saved {
     saved
 }
 
-pub fn leave(saved: &Saved) {
+pub fn restore(saved: &Saved) {
     set_dock(saved.dock_autohide);
     let _ = std::fs::remove_file(state_file());
 }
 
-/// For `wingroup --restore`: undo full mode from the state file.
-pub fn restore_from_file() -> bool {
+/// For `wingroup --restore`: undo full screen from the state file.
+pub fn restore_after_crash() -> bool {
     let Ok(text) = std::fs::read_to_string(state_file()) else { return false };
     let mut dock = false;
     for line in text.lines() {
@@ -51,6 +52,6 @@ pub fn restore_from_file() -> bool {
             dock = v == "true";
         }
     }
-    leave(&Saved { dock_autohide: dock });
+    restore(&Saved { dock_autohide: dock });
     true
 }
