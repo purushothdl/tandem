@@ -11,8 +11,9 @@ use objc2_app_kit::{
     NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 const H: f64 = 30.0;
 const ICON: f64 = 20.0;
@@ -23,10 +24,10 @@ struct Shown {
     width: f64,
     name: String,
     at: Rect,
-    pill_on: bool,
+    pill_on: f64,
     /// Outline for when another window of the group is being pointed at.
     ring: Retained<NSPanel>,
-    ring_on: bool,
+    ring_on: f64,
 }
 
 thread_local! {
@@ -105,16 +106,41 @@ fn build(mtm: MainThreadMarker, l: &Label) -> Shown {
         layer.setBorderColor(Some(&NSColor::controlAccentColor().CGColor()));
     }
     ring.setContentView(Some(&rv));
-    Shown { pill, width, name: l.name.clone(), at: Rect::default(), pill_on: false, ring, ring_on: false }
+    Shown { pill, width, name: l.name.clone(), at: Rect::default(), pill_on: 0.0, ring, ring_on: 0.0 }
 }
 
-fn set(p: &NSPanel, on: bool, was: &mut bool) {
-    if on && !*was {
+/// Move a panel's opacity a step towards where it should be.
+fn fade(p: &NSPanel, on: bool, now: &mut f64) {
+    let next = if on { (*now + 0.16).min(1.0) } else { (*now - 0.22).max(0.0) };
+    if next == *now {
+        return;
+    }
+    if *now == 0.0 {
+        p.setAlphaValue(0.0);
         p.orderFrontRegardless();
-    } else if !on && *was {
+    }
+    p.setAlphaValue(next);
+    if next == 0.0 {
         p.orderOut(None::<&AnyObject>);
     }
-    *was = on;
+    *now = next;
+}
+
+fn hide(o: &mut Shown) {
+    for (p, now) in [(&o.pill, &mut o.pill_on), (&o.ring, &mut o.ring_on)] {
+        if *now > 0.0 {
+            p.orderOut(None::<&AnyObject>);
+            *now = 0.0;
+        }
+    }
+}
+
+/// How long every thumbnail must have been still before anything shows. A slow swipe keeps
+/// them moving, with short pauses; showing in each pause is what flickered.
+const STILL: Duration = Duration::from_millis(220);
+
+thread_local! {
+    static MOVED: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 /// `mx`, `my`: the pointer; `screen_h`: height of the primary display.
@@ -123,34 +149,39 @@ pub fn refresh(mtm: MainThreadMarker, mx: f64, my: f64, screen_h: f64) {
     SHOWN.with(|s| {
         let mut s = s.borrow_mut();
         if labels.is_empty() {
-            for (_, mut o) in s.drain() {
-                set(&o.pill, false, &mut o.pill_on);
-                set(&o.ring, false, &mut o.ring_on);
-            }
+            // kept for next time: building them again is slow enough to see
+            s.values_mut().for_each(hide);
+            MOVED.set(None);
             return;
         }
+        s.retain(|wid, o| {
+            let keep = labels.iter().any(|l| l.wid == *wid && l.name == o.name);
+            if !keep {
+                hide(o);
+            }
+            keep
+        });
+        for l in &labels {
+            let o = s.entry(l.wid).or_insert_with(|| build(mtm, l));
+            if o.at != l.at {
+                o.at = l.at;
+                MOVED.set(Some(Instant::now()));
+            }
+        }
+        let still = MOVED.get().is_none_or(|t| t.elapsed() > STILL);
         let hovered = labels.iter().find(|l| l.hovered).map(|l| (l.group, l.wid));
         for l in &labels {
-            if s.get(&l.wid).is_none_or(|o| o.name != l.name) {
-                if let Some(mut old) = s.insert(l.wid, build(mtm, l)) {
-                    set(&old.pill, false, &mut old.pill_on);
-                    set(&old.ring, false, &mut old.ring_on);
-                }
-            }
             let Some(o) = s.get_mut(&l.wid) else { continue };
-            // wait until the thumbnail has stopped moving
-            let settled = o.at == l.at;
-            if !settled {
-                o.at = l.at;
+            if still && o.pill_on == 0.0 {
                 let y = l.at.y + 10.0;
                 o.pill.setFrame_display(rect(l.at.x + (l.at.w - o.width) / 2.0, screen_h - y - H, o.width, H), true);
                 let r = Rect { x: l.at.x - RING, y: l.at.y - RING, w: l.at.w + 2.0 * RING, h: l.at.h + 2.0 * RING };
                 o.ring.setFrame_display(rect(r.x, screen_h - r.bottom(), r.w, r.h), true);
             }
-            set(&o.pill, settled, &mut o.pill_on);
+            fade(&o.pill, still, &mut o.pill_on);
             // macOS outlines the one under the pointer itself; its partners are ours
             let partner = hovered.is_some_and(|(g, wid)| g == l.group && wid != l.wid);
-            set(&o.ring, settled && partner, &mut o.ring_on);
+            fade(&o.ring, still && partner, &mut o.ring_on);
         }
     });
 }
