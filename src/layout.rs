@@ -82,6 +82,8 @@ pub struct Layout {
     root: Node,
     /// Smallest (width, height) each window accepts, as far as known.
     mins: Vec<(f64, f64)>,
+    /// Minimised windows keep their place in the tree but take no space.
+    hidden: Vec<bool>,
 }
 
 impl Layout {
@@ -93,7 +95,7 @@ impl Layout {
         let b = rects.iter().map(|r| r.bottom()).fold(f64::MIN, f64::max);
         let bounds = Rect { x, y, w: (r - x).max(1.0), h: (b - y).max(1.0) };
         let all: Vec<usize> = (0..rects.len()).collect();
-        let mut l = Layout { region: bounds, root: build(&all, rects), mins: vec![(MIN_W, MIN_H); rects.len()] };
+        let mut l = Layout { region: bounds, root: build(&all, rects), mins: vec![(MIN_W, MIN_H); rects.len()], hidden: vec![false; rects.len()] };
         l.set_region(region);
         l.snap();
         l
@@ -123,48 +125,63 @@ impl Layout {
 
     pub fn frames(&self) -> Vec<Rect> {
         let mut out = vec![Rect::default(); self.mins.len()];
-        fn walk(n: &Node, r: Rect, out: &mut [Rect]) {
+        fn walk(n: &Node, r: Rect, hidden: &[bool], out: &mut [Rect]) {
             match n {
                 Node::Leaf(i) => out[*i] = r,
                 Node::Split { side, at, a, b } => {
-                    let (ra, rb) = r.cut(*side, *at);
-                    walk(a, ra, out);
-                    walk(b, rb, out);
+                    let (ra, rb) = parts(r, *side, *at, a, b, hidden);
+                    walk(a, ra, hidden, out);
+                    walk(b, rb, hidden, out);
                 }
             }
         }
-        walk(&self.root, self.region, &mut out);
+        walk(&self.root, self.region, &self.hidden, &mut out);
         out
     }
 
+    /// The seams between windows that are showing.
     pub fn seams(&self) -> Vec<Seam> {
-        fn walk(n: &Node, r: Rect, out: &mut Vec<Seam>) {
+        fn walk(n: &Node, r: Rect, hidden: &[bool], out: &mut Vec<Seam>) {
             if let Node::Split { side, at, a, b } = n {
-                out.push(Seam { side: *side, at: *at, from: r.lo(!side), to: r.hi(!side) });
-                let (ra, rb) = r.cut(*side, *at);
-                walk(a, ra, out);
-                walk(b, rb, out);
+                if !gone(a, hidden) && !gone(b, hidden) {
+                    out.push(Seam { side: *side, at: *at, from: r.lo(!side), to: r.hi(!side) });
+                }
+                let (ra, rb) = parts(r, *side, *at, a, b, hidden);
+                walk(a, ra, hidden, out);
+                walk(b, rb, hidden, out);
             }
         }
         let mut out = Vec::new();
-        walk(&self.root, self.region, &mut out);
+        walk(&self.root, self.region, &self.hidden, &mut out);
         out
+    }
+
+    pub fn is_hidden(&self, i: usize) -> bool {
+        self.hidden[i]
+    }
+
+    /// Window `i` was minimised (its neighbour takes the space) or is back.
+    pub fn set_hidden(&mut self, i: usize, hidden: bool) {
+        self.hidden[i] = hidden;
+        self.fit();
     }
 
     /// Put seam `k` at `pos`. It stops where a window would get smaller than its minimum;
     /// other seams in the way are pushed. The outer edges never move.
     pub fn drag_seam(&mut self, k: usize, pos: f64) {
-        fn walk(n: &mut Node, k: &mut usize, pos: f64) -> bool {
+        fn walk(n: &mut Node, k: &mut usize, pos: f64, hidden: &[bool]) -> bool {
             let Node::Split { at, a, b, .. } = n else { return false };
-            if *k == 0 {
-                *at = pos.round();
-                return true;
+            if !gone(a, hidden) && !gone(b, hidden) {
+                if *k == 0 {
+                    *at = pos.round();
+                    return true;
+                }
+                *k -= 1;
             }
-            *k -= 1;
-            walk(a, k, pos) || walk(b, k, pos)
+            walk(a, k, pos, hidden) || walk(b, k, pos, hidden)
         }
         let mut k = k;
-        walk(&mut self.root, &mut k, pos);
+        walk(&mut self.root, &mut k, pos, &self.hidden);
         self.fit();
     }
 
@@ -181,7 +198,7 @@ impl Layout {
 
     /// Do the minimum sizes fit in the region at all?
     pub fn fits(&self) -> bool {
-        need(&self.root, true, &self.mins) <= self.region.w && need(&self.root, false, &self.mins) <= self.region.h
+        need(&self.root, true, &self.mins, &self.hidden) <= self.region.w && need(&self.root, false, &self.mins, &self.hidden) <= self.region.h
     }
 
     /// Move the group to a new region, keeping every proportion.
@@ -203,22 +220,27 @@ impl Layout {
 
     /// Same share for every window along each run of columns or rows.
     pub fn equalize(&mut self) {
-        fn run(n: &Node, s: bool) -> f64 {
+        fn run(n: &Node, s: bool, hidden: &[bool]) -> f64 {
             match n {
-                Node::Split { side, a, b, .. } if *side == s => run(a, s) + run(b, s),
+                _ if gone(n, hidden) => 0.0,
+                Node::Split { side, a, b, .. } if *side == s || gone(a, hidden) || gone(b, hidden) => {
+                    run(a, s, hidden) + run(b, s, hidden)
+                }
                 _ => 1.0,
             }
         }
-        fn walk(n: &mut Node, r: Rect) {
+        fn walk(n: &mut Node, r: Rect, hidden: &[bool]) {
             if let Node::Split { side, at, a, b } = n {
-                let (wa, wb) = (run(a, *side), run(b, *side));
-                *at = (r.lo(*side) + (r.hi(*side) - r.lo(*side)) * wa / (wa + wb)).round();
-                let (ra, rb) = r.cut(*side, *at);
-                walk(a, ra);
-                walk(b, rb);
+                if !gone(a, hidden) && !gone(b, hidden) {
+                    let (wa, wb) = (run(a, *side, hidden), run(b, *side, hidden));
+                    *at = (r.lo(*side) + (r.hi(*side) - r.lo(*side)) * wa / (wa + wb)).round();
+                }
+                let (ra, rb) = parts(r, *side, *at, a, b, hidden);
+                walk(a, ra, hidden);
+                walk(b, rb, hidden);
             }
         }
-        walk(&mut self.root, self.region);
+        walk(&mut self.root, self.region, &self.hidden);
         self.fit();
     }
 
@@ -241,6 +263,7 @@ impl Layout {
         }
         let new = self.mins.len();
         self.mins.push((MIN_W, MIN_H));
+        self.hidden.push(false);
         walk(&mut self.root, i, self.region, new);
         self.fit();
         new
@@ -261,31 +284,48 @@ impl Layout {
         let root = std::mem::replace(&mut self.root, Node::Leaf(0));
         self.root = walk(root, i).unwrap_or(Node::Leaf(0));
         self.mins.remove(i);
+        self.hidden.remove(i);
         self.fit();
     }
 
     /// Pull every seam inside what the minimum sizes allow.
     fn fit(&mut self) {
-        fn walk(n: &mut Node, r: Rect, mins: &[(f64, f64)]) {
+        fn walk(n: &mut Node, r: Rect, mins: &[(f64, f64)], hidden: &[bool]) {
             if let Node::Split { side, at, a, b } = n {
-                let lo = r.lo(*side) + need(a, *side, mins);
-                let hi = r.hi(*side) - need(b, *side, mins);
-                *at = if lo > hi { ((lo + hi) / 2.0).round() } else { at.clamp(lo, hi) };
-                let (ra, rb) = r.cut(*side, *at);
-                walk(a, ra, mins);
-                walk(b, rb, mins);
+                if !gone(a, hidden) && !gone(b, hidden) {
+                    let lo = r.lo(*side) + need(a, *side, mins, hidden);
+                    let hi = r.hi(*side) - need(b, *side, mins, hidden);
+                    *at = if lo > hi { ((lo + hi) / 2.0).round() } else { at.clamp(lo, hi) };
+                }
+                let (ra, rb) = parts(r, *side, *at, a, b, hidden);
+                walk(a, ra, mins, hidden);
+                walk(b, rb, mins, hidden);
             }
         }
-        walk(&mut self.root, self.region, &self.mins);
+        walk(&mut self.root, self.region, &self.mins, &self.hidden);
     }
 }
 
-/// Smallest size a subtree can take on one axis.
-fn need(n: &Node, width: bool, mins: &[(f64, f64)]) -> f64 {
+/// Is everything in this subtree minimised?
+fn gone(n: &Node, hidden: &[bool]) -> bool {
     match n {
+        Node::Leaf(i) => hidden[*i],
+        Node::Split { a, b, .. } => gone(a, hidden) && gone(b, hidden),
+    }
+}
+
+/// The two halves of a split; a side with nothing showing gives its space away.
+fn parts(r: Rect, side: bool, at: f64, a: &Node, b: &Node, hidden: &[bool]) -> (Rect, Rect) {
+    if gone(a, hidden) || gone(b, hidden) { (r, r) } else { r.cut(side, at) }
+}
+
+/// Smallest size a subtree can take on one axis.
+fn need(n: &Node, width: bool, mins: &[(f64, f64)], hidden: &[bool]) -> f64 {
+    match n {
+        Node::Leaf(i) if hidden[*i] => 0.0,
         Node::Leaf(i) => if width { mins[*i].0 } else { mins[*i].1 },
         Node::Split { side, a, b, .. } => {
-            let (x, y) = (need(a, width, mins), need(b, width, mins));
+            let (x, y) = (need(a, width, mins, hidden), need(b, width, mins, hidden));
             if *side == width { x + y } else { x.max(y) }
         }
     }
@@ -447,6 +487,26 @@ mod tests {
         l.learn_min(1, false, 560.0);
         l.split(1);
         assert!(!l.fits());
+    }
+
+    #[test]
+    fn minimising_gives_the_space_away_and_restoring_returns_it() {
+        let mut l = half_and_stack();
+        l.drag_seam(1, 200.0);
+        let before = l.frames();
+        l.set_hidden(1, true);
+        assert_eq!(l.frames()[2], r(500.0, 30.0, 500.0, 600.0));
+        assert_eq!(l.seams().len(), 1);
+        l.set_hidden(2, true);
+        assert_eq!(l.frames()[0], R);
+        assert!(l.seams().is_empty());
+        l.set_hidden(1, false);
+        l.set_hidden(2, false);
+        assert_eq!(l.frames(), before);
+        // the seam that is left is the one that moves
+        l.set_hidden(0, true);
+        l.drag_seam(0, 400.0);
+        assert_eq!(l.frames()[1], r(0.0, 30.0, 1000.0, 370.0));
     }
 
     #[test]

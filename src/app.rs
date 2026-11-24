@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 const GRAB: f64 = 6.0;
 pub const MAX_TILES: usize = 6;
 /// How long windows take to glide into place.
-const GLIDE: f64 = 0.24;
+const GLIDE: f64 = 0.30;
 
 struct Member {
     elem: Elem,
@@ -35,14 +35,17 @@ struct Member {
     tx: Sender<Rect>,
     /// A frame the app keeps coming back to; asking again would be pointless.
     stuck_at: Option<Rect>,
+    /// Where it was before it joined, to return to when it leaves.
+    home: Option<Rect>,
 }
 
 impl Member {
     fn open(pid: i32, wid: u32) -> Option<Member> {
         let elem = ax::find_window(pid, wid)?;
         elem.set_timeout(0.4);
+        let home = elem.frame();
         let tx = writer::spawn(elem.clone(), wid);
-        Some(Member { elem, pid, wid, tx, stuck_at: None })
+        Some(Member { elem, pid, wid, tx, stuck_at: None, home })
     }
 }
 
@@ -56,6 +59,7 @@ struct Group {
     /// The tile last used, to return the keyboard to.
     used: u32,
     raised_at: Option<Instant>,
+    handed_at: Option<Instant>,
     members: Vec<Member>,
     layout: Layout,
     expected: Vec<Rect>,
@@ -84,9 +88,17 @@ struct App {
     verify: Option<(u32, Instant, usize)>,
     /// Mission Control was open until at least this moment.
     mc_seen: Option<Instant>,
-    /// Our window whose Mission Control thumbnail is being clicked.
-    mc_pick: Option<u32>,
+    /// The window on top in Mission Control; a change means one was picked.
+    mc_top: u32,
     front_pid: i32,
+    /// In Mission Control: what was on top when it opened (pid, window id).
+    mc_origin: Option<(i32, u32)>,
+    /// The window being hovered there, and since when.
+    mc_hover: Option<(u32, Instant)>,
+    /// The group brought up in advance for the hovered window.
+    prepared: Option<u32>,
+    /// Diagnostics: window order after a switch, logged on change.
+    trace: Option<(Instant, Vec<u32>, bool)>,
     next_id: u32,
     /// The group being worked in (also while using a window floating over it).
     active: Option<u32>,
@@ -102,8 +114,12 @@ thread_local! {
         counter: 0,
         verify: None,
         mc_seen: None,
-        mc_pick: None,
+        mc_top: 0,
         front_pid: 0,
+        mc_origin: None,
+        mc_hover: None,
+        prepared: None,
+        trace: None,
         next_id: 1,
         active: None,
     });
@@ -131,6 +147,18 @@ fn primary_visible() -> Rect {
     let s = screens.objectAtIndex(0);
     let (f, v) = (s.frame(), s.visibleFrame());
     Rect { x: v.origin.x, y: f.size.height - (v.origin.y + v.size.height), w: v.size.width, h: v.size.height }
+}
+
+fn raise_all<'a>(members: impl Iterator<Item = &'a Member>) {
+    for m in members {
+        let e = writer::SendElem(m.elem.clone());
+        std::thread::spawn(move || {
+            let e = e;
+            if !e.0.is_minimized() {
+                e.0.raise();
+            }
+        });
+    }
 }
 
 fn default_name(g: &Group) -> String {
@@ -177,7 +205,7 @@ impl Group {
         let frames = self.layout.frames();
         for (j, (m, f)) in self.members.iter_mut().zip(&frames).enumerate() {
             m.stuck_at = None;
-            if self.expected.get(j) != Some(f) {
+            if self.expected.get(j) != Some(f) && !self.layout.is_hidden(j) {
                 let _ = m.tx.send(*f);
             }
         }
@@ -186,21 +214,48 @@ impl Group {
     }
 
     /// The same, but let the windows glide there from where they are now.
-    fn place_smoothly(&mut self, order: &[WinInfo]) {
+    /// `still`: a window that is already in place (its reported position is mid-animation).
+    fn place_smoothly(&mut self, order: &[WinInfo], still: Option<u32>) {
         let to = self.layout.frames();
         let from: Vec<Rect> = self
             .members
             .iter()
             .zip(&to)
-            .map(|(m, t)| order.iter().find(|w| w.id == m.wid).map_or(*t, |w| w.bounds))
+            .enumerate()
+            .map(|(j, (m, t))| {
+                if self.layout.is_hidden(j) || Some(m.wid) == still {
+                    return *t;
+                }
+                order.iter().find(|w| w.id == m.wid).map_or(*t, |w| w.bounds)
+            })
             .collect();
         let far = from.iter().zip(&to).map(|(a, b)| a.distance(b)).fold(0.0, f64::max);
         let calm = NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
-        self.expected.clear(); // ask every window again, wherever it is
-        self.place();
         if far > 24.0 && !calm {
+            // only ever the steps: sending the end first would make the windows jump
+            self.members.iter_mut().for_each(|m| m.stuck_at = None);
+            self.expected = to;
+            self.changed_at = Instant::now();
             self.glide = Some((from, Instant::now()));
-            self.step();
+        } else {
+            self.expected.clear(); // ask every window again, wherever it is
+            self.place();
+        }
+    }
+
+    /// One frame of the glide: eases in and out.
+    fn step(&mut self) {
+        let Some((from, t0)) = &self.glide else { return };
+        let t = (t0.elapsed().as_secs_f64() / GLIDE).min(1.0);
+        let e = if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 };
+        for (j, ((m, a), b)) in self.members.iter().zip(from).zip(&self.expected).enumerate() {
+            if !self.layout.is_hidden(j) {
+                let _ = m.tx.send(a.lerp(b, e));
+            }
+        }
+        self.changed_at = Instant::now();
+        if t >= 1.0 {
+            self.glide = None;
         }
     }
 
@@ -208,20 +263,6 @@ impl Group {
     fn auto_name(&mut self) {
         if !self.named {
             self.name = default_name(self);
-        }
-    }
-
-    /// One frame of the glide: fast start, soft landing.
-    fn step(&mut self) {
-        let Some((from, t0)) = &self.glide else { return };
-        let t = (t0.elapsed().as_secs_f64() / GLIDE).min(1.0);
-        let e = 1.0 - (1.0 - t).powi(3);
-        for ((m, a), b) in self.members.iter().zip(from).zip(&self.expected) {
-            let _ = m.tx.send(a.lerp(b, e));
-        }
-        self.changed_at = Instant::now();
-        if t >= 1.0 {
-            self.glide = None;
         }
     }
 
@@ -235,17 +276,23 @@ impl Group {
             return;
         }
         let mut off = false;
-        for (m, exp) in self.members.iter_mut().zip(&self.expected) {
+        for (j, (m, exp)) in self.members.iter_mut().zip(&self.expected).enumerate() {
+            if self.layout.is_hidden(j) {
+                continue;
+            }
             let Some(w) = order.iter().find(|w| w.id == m.wid) else { continue };
             if w.bounds.near(exp) {
                 m.stuck_at = None;
             } else if m.stuck_at != Some(w.bounds) {
-                off = true;
+                // what is on screen may be an animation (minimising, Spaces); the app knows
+                if !m.elem.is_minimized() && m.elem.frame().is_some_and(|f| !f.near(exp)) {
+                    off = true;
+                }
             }
         }
         if off {
             let seen: Vec<Option<Rect>> = self.members.iter().map(|m| order.iter().find(|w| w.id == m.wid).map(|w| w.bounds)).collect();
-            self.place_smoothly(order);
+            self.place_smoothly(order, None);
             for ((m, s), exp) in self.members.iter_mut().zip(seen).zip(&self.expected) {
                 m.stuck_at = s.filter(|b| !b.near(exp));
             }
@@ -282,9 +329,46 @@ impl Group {
 
     /// Bring the rest of the group up under `focus`, which is already on top. Each raise
     /// lands just below the active window, so going rear to front rebuilds the stacking.
-    fn raise_rest(&mut self, focus: u32, order: &[WinInfo]) {
+    fn raise_rest(&mut self, focus: u32, order: &[WinInfo]) -> bool {
         if self.raised_at.is_some_and(|t| t.elapsed() < Duration::from_millis(50)) {
-            return;
+            return false;
+        }
+        // macOS keeps all windows of the active app above other apps' raised windows. When
+        // another window of the focused app sits in between, activate each app in turn instead.
+        let fpid = order.iter().find(|w| w.id == focus).map(|w| w.pid);
+        let want_ids = self.wanted(focus, order);
+        let rear = order.iter().rposition(|w| want_ids.iter().any(|s| s.1 == w.id)).unwrap_or(0);
+        let sibling = order[..rear].iter().any(|w| {
+            Some(w.pid) == fpid && w.id != focus && !want_ids.iter().any(|s| s.1 == w.id) && self.has(w.id).is_none()
+        });
+        if sibling && want_ids.iter().all(|s| Some(s.0) != fpid) {
+            if self.handed_at.is_some_and(|t| t.elapsed() < Duration::from_millis(45)) {
+                return false;
+            }
+            let Some(f) = self.members.iter().find(|m| m.wid == focus) else { return false };
+            self.handed_at = Some(Instant::now());
+            let mut list: Vec<(writer::SendElem, i32, u32)> = want_ids
+                .iter()
+                .rev()
+                .filter_map(|s| self.members.iter().find(|m| m.wid == s.1))
+                .map(|m| (writer::SendElem(m.elem.clone()), m.pid, m.wid))
+                .collect();
+            list.push((writer::SendElem(f.elem.clone()), f.pid, f.wid));
+            std::thread::spawn(move || {
+                let mut list = list;
+                let Some((f, fpid, fwid)) = list.pop() else { return };
+                for (e, pid, _) in list {
+                    if !e.0.is_minimized() {
+                        activate(pid, &e.0);
+                    }
+                }
+                // back to the chosen window: first the app without its windows, then just this one
+                if !ax::focus_without_raising(fpid, fwid) {
+                    activate(fpid, &f.0);
+                }
+                f.0.raise();
+            });
+            return true;
         }
         self.raised_at = Some(Instant::now());
         let want = self.wanted(focus, order);
@@ -306,6 +390,7 @@ impl Group {
                 std::thread::spawn(move || up(e, pid, wid));
             }
         }
+        true
     }
 
     /// Remember the stacking while the group is in use.
@@ -335,7 +420,9 @@ impl App {
             e.insert(obs);
         }
         if let Some(obs) = self.observers.get(&pid) {
-            obs.add(elem, "AXUIElementDestroyed");
+            for n in ["AXUIElementDestroyed", "AXWindowMiniaturized", "AXWindowDeminiaturized"] {
+                obs.add(elem, n);
+            }
         }
     }
 
@@ -346,6 +433,20 @@ impl App {
             return;
         };
         self.drop_member(gi, mi);
+    }
+
+    /// Minimised: the neighbours take the space. Back: it gets its place again.
+    fn window_hidden(&mut self, el: &Elem, hidden: bool) {
+        let Some((g, mi)) = self.groups.iter_mut().find_map(|g| g.members.iter().position(|m| m.elem.same(el)).map(|mi| (g, mi))) else {
+            return;
+        };
+        if g.layout.is_hidden(mi) == hidden {
+            return;
+        }
+        self.drag = None;
+        g.layout.set_hidden(mi, hidden);
+        let wid = g.members[mi].wid;
+        g.place_smoothly(&ax::window_order(), Some(wid));
     }
 
     /// Take a window out of its group; the neighbour gets its space.
@@ -360,7 +461,7 @@ impl App {
         } else {
             g.layout.remove(mi);
             g.auto_name();
-            g.place_smoothly(&ax::window_order());
+            g.place_smoothly(&ax::window_order(), None);
         }
     }
 
@@ -416,7 +517,7 @@ impl App {
             self.drag = None;
             if let Some(g) = self.groups.iter_mut().find(|g| g.id == id) {
                 g.auto_name();
-                g.place_smoothly(&order);
+                g.place_smoothly(&order, None);
             }
         }
         refused.unwrap_or_else(|| format!("Added {added}"))
@@ -506,7 +607,7 @@ impl App {
                     let g = &mut self.groups[gi];
                     if clicks == 2 {
                         g.layout.equalize();
-                        g.place_smoothly(&ax::window_order());
+                        g.place_smoothly(&ax::window_order(), None);
                     }
                     let Some(s) = g.layout.seams().get(k).copied() else { return Verdict::Pass };
                     let off = if s.side { x } else { y } - s.at;
@@ -514,12 +615,10 @@ impl App {
                     return Verdict::Swallow;
                 }
                 self.verify = None;
-                self.mc_pick = None;
                 let all = ax::all_windows();
                 if ax::mission_control_open(&all) {
-                    // the press belongs to Mission Control, but it tells us which group is coming
-                    let pick = ax::normal(&all).iter().find(|w| w.bounds.contains(x, y)).map(|w| w.id);
-                    self.mc_pick = pick.filter(|w| self.groups.iter().any(|g| g.has(*w).is_some() || g.stack.iter().any(|s| s.1 == *w)));
+                    // Mission Control's business (and real clicks there do not even reach us);
+                    // watch_mission_control sees what gets picked
                     return Verdict::Pass;
                 }
                 let order = ax::normal(&all);
@@ -536,13 +635,6 @@ impl App {
                 self.drag_to(x, y);
                 Verdict::Swallow
             }
-            2 if self.mc_pick.is_some() => {
-                if let Some(wid) = self.mc_pick.take() {
-                    let id = self.groups.iter().find(|g| g.stack.iter().any(|s| s.1 == wid) || g.has(wid).is_some()).map(|g| g.id);
-                    self.come_to(id, wid);
-                }
-                Verdict::Pass
-            }
             2 if self.drag.is_some() => {
                 self.drag_to(x, y);
                 self.drag = None;
@@ -552,9 +644,61 @@ impl App {
         }
     }
 
+    /// Hovering a window in Mission Control. If its app also has windows elsewhere, macOS
+    /// would keep those above the rest of its group until the other apps answer, so bring
+    /// them up now: thumbnails do not overlap, and the click then finds everything in place.
+    fn hover_in_mission_control(&mut self, wid: Option<u32>, order: &[WinInfo]) {
+        if self.mc_hover.map(|h| h.0) != wid {
+            self.mc_hover = wid.map(|w| (w, Instant::now()));
+            return;
+        }
+        let Some((wid, since)) = self.mc_hover else { return };
+        if since.elapsed() < Duration::from_millis(90) {
+            return;
+        }
+        let Some(w) = order.iter().find(|w| w.id == wid).copied() else { return };
+        let Some(g) = self.groups.iter().find(|g| g.has(wid).is_some()) else {
+            self.unprepare();
+            return;
+        };
+        let id = g.id;
+        if self.prepared == Some(id) {
+            return;
+        }
+        let elsewhere = order.iter().any(|o| o.pid == w.pid && g.has(o.id).is_none());
+        // the group already in front needs nothing
+        if !elsewhere || (self.prepared.is_none() && self.active == Some(id)) {
+            self.unprepare();
+            return;
+        }
+        log(&format!("preparing {} for {wid}", g.name));
+        // raise only: activating anything here would change the front app and restack the
+        // thumbnails of its windows
+        raise_all(g.members.iter().filter(|m| m.pid != w.pid));
+        self.prepared = Some(id);
+    }
+
+    /// Put things back as they were when Mission Control opened.
+    fn unprepare(&mut self) {
+        if self.prepared.take().is_none() {
+            return;
+        }
+        log("unprepare");
+        let Some((pid, wid)) = self.mc_origin else { return };
+        if ax::window_order().first().map(|w| w.id) != Some(wid) {
+            return; // something else was chosen after all
+        }
+        if let Some(g) = self.groups.iter().find(|g| g.has(wid).is_some()) {
+            raise_all(g.members.iter().filter(|m| m.pid != pid));
+        } else if let Some(e) = ax::find_window(pid, wid) {
+            e.raise();
+        }
+    }
+
     /// The user is coming to a group through this window (a tile, or a pane of it).
     fn come_to(&mut self, id: Option<u32>, wid: u32) {
         self.active = id;
+        self.trace = Some((Instant::now(), Vec::new(), false));
         self.verify = Some((wid, Instant::now(), 0));
         for i in 1..=24 {
             schedule(i as f64 * 0.005, 0.0, follow_cb);
@@ -573,13 +717,8 @@ impl App {
         if top != wid && g.has(top).is_none() {
             return false;
         }
-        if !g.in_place(top, &order, mc) {
-            log(&format!(
-                "bringing up {} for {top}: order {:?}",
-                g.name,
-                order.iter().take(8).map(|w| w.id).collect::<Vec<_>>()
-            ));
-            g.raise_rest(top, &order);
+        if !g.in_place(top, &order, mc) && g.raise_rest(top, &order) {
+            log(&format!("bringing up {} for {top} at {} ms", g.name, self.verify.map_or(0, |v| v.1.elapsed().as_millis())));
         }
         true
     }
@@ -587,6 +726,48 @@ impl App {
     fn follow(&mut self) {
         if self.verify.is_some_and(|v| v.1.elapsed() < Duration::from_millis(150)) {
             self.settle(&ax::all_windows());
+        }
+    }
+
+    fn trace_order(&mut self) {
+        let Some((t0, last, mc0)) = &mut self.trace else { return };
+        if t0.elapsed() > Duration::from_millis(1200) {
+            self.trace = None;
+            return;
+        }
+        let all = ax::all_windows();
+        let mc = ax::mission_control_open(&all);
+        let now: Vec<u32> = ax::normal(&all).iter().take(7).map(|w| w.id).collect();
+        if now != *last || mc != *mc0 {
+            log(&format!("  +{} ms mc {mc} front {}: {now:?}", t0.elapsed().as_millis(), self.front_pid));
+            *last = now;
+            *mc0 = mc;
+        }
+    }
+
+    /// Picking a window in Mission Control puts it on top at once, long before Mission
+    /// Control has closed. That is the earliest sign there is, and the only one when the
+    /// window belongs to the app that was already active.
+    fn watch_mission_control(&mut self) {
+        if self.groups.is_empty() || !self.mc_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(250)) {
+            return;
+        }
+        let all = ax::all_windows();
+        if !ax::mission_control_open(&all) {
+            return;
+        }
+        let Some(top) = ax::normal(&all).first().map(|w| w.id) else { return };
+        if top == self.mc_top {
+            return;
+        }
+        self.mc_top = top;
+        self.prepared = None;
+        let id = self.groups.iter().find(|g| g.has(top).is_some()).map(|g| g.id);
+        let pane = || self.groups.iter().find(|g| g.stack.iter().any(|s| s.1 == top)).map(|g| g.id);
+        let id = id.or_else(pane);
+        log(&format!("picked {top} in Mission Control, group {id:?}"));
+        if id.is_some() && !self.verify.is_some_and(|v| v.0 == top) {
+            self.come_to(id, top);
         }
     }
 
@@ -615,6 +796,14 @@ impl App {
             return;
         }
         self.front_pid = pid;
+        // during a switch, an app of that group becoming active is part of the switch; its
+        // first window may still be one that belongs elsewhere
+        if self.verify.is_some() {
+            let active = self.active;
+            if self.groups.iter().any(|g| Some(g.id) == active && g.members.iter().any(|m| m.pid == pid)) {
+                return;
+            }
+        }
         if self.groups.is_empty() || pid == std::process::id() as i32 {
             return;
         }
@@ -650,10 +839,20 @@ impl App {
         self.learn();
         let all = ax::all_windows();
         if ax::mission_control_open(&all) {
+            if self.mc_seen.is_none_or(|t| t.elapsed() > Duration::from_millis(400)) {
+                self.mc_origin = ax::normal(&all).first().map(|w| (w.pid, w.id));
+                self.mc_top = self.mc_origin.map_or(0, |o| o.1);
+                self.mc_hover = None;
+                self.prepared = None;
+            }
             self.mc_seen = Some(Instant::now());
             return;
         }
         let order = ax::normal(&all);
+        if self.prepared.is_some() {
+            self.unprepare(); // left without choosing
+            return;
+        }
         // windows are still growing back for a moment after Mission Control closes
         let calm = self.mc_seen.is_none_or(|t| t.elapsed() > Duration::from_millis(900));
         let front = NSWorkspace::sharedWorkspace().frontmostApplication().map(|a| a.processIdentifier());
@@ -726,6 +925,7 @@ impl App {
             stack: Vec::new(),
             panes: Vec::new(),
             raised_at: None,
+            handed_at: None,
             used: 0,
             glide: None,
             name: String::new(),
@@ -742,7 +942,7 @@ impl App {
         g.used = self.last.map_or(0, |l| l.1);
         self.next_id += 1;
         self.active = Some(g.id);
-        g.place_smoothly(&order);
+        g.place_smoothly(&order, None);
         let n = g.members.len();
         self.groups.push(g);
         format!("Tiled {n} windows")
@@ -751,14 +951,12 @@ impl App {
 
 extern "C" fn callback(_obs: *mut c_void, el: RawElem, notif: CFStringRef, _refcon: *mut c_void) {
     let name = unsafe { CFString::wrap_under_get_rule(notif) }.to_string();
-    if name != "AXUIElementDestroyed" {
-        return;
-    }
     let el = Elem::from_borrowed(el);
-    APP.with(|a| {
-        if let Ok(mut a) = a.try_borrow_mut() {
-            a.window_closed(&el);
-        }
+    with_try(|a| match name.as_str() {
+        "AXUIElementDestroyed" => a.window_closed(&el),
+        "AXWindowMiniaturized" => a.window_hidden(&el, true),
+        "AXWindowDeminiaturized" => a.window_hidden(&el, false),
+        _ => {}
     });
 }
 
@@ -888,7 +1086,29 @@ pub fn remove_window(wid: u32) -> String {
         let Some((gi, mi)) = a.groups.iter().enumerate().find_map(|(gi, g)| g.has(wid).map(|mi| (gi, mi))) else {
             return "No such window in a group".into();
         };
+        // back to the size it had before, and behind the group it no longer belongs to
+        let (tx, home) = (a.groups[gi].members[mi].tx.clone(), a.groups[gi].members[mi].home);
+        let next = a.groups[gi]
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| *i != mi && m.wid != wid && !a.groups[gi].layout.is_hidden(*i))
+            .max_by_key(|(_, m)| m.wid == a.groups[gi].used)
+            .map(|(_, m)| (m.pid, m.wid, m.elem.clone()));
+        let id = a.groups[gi].id;
+        a.groups[gi].panes.retain(|p| *p != wid);
         a.drop_member(gi, mi);
+        if let Some((pid, w, elem)) = next {
+            activate(pid, &elem);
+            a.come_to(a.groups.iter().any(|g| g.id == id).then_some(id), w);
+        }
+        if let Some(h) = home {
+            // once the group is in front of it
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(350));
+                let _ = tx.send(h);
+            });
+        }
         "Removed".into()
     })
 }
@@ -905,7 +1125,7 @@ pub fn equalize(id: Option<u32>) -> String {
     with(|a| match pick(a, id) {
         Some(i) => {
             a.groups[i].layout.equalize();
-            a.groups[i].place_smoothly(&ax::window_order());
+            a.groups[i].place_smoothly(&ax::window_order(), None);
             "Sizes evened out".into()
         }
         None => "No group".into(),
@@ -937,7 +1157,8 @@ pub fn ungroup_all() -> String {
 pub fn switch_to(id: u32) -> String {
     with(|a| {
         let Some(g) = a.groups.iter().find(|g| g.id == id) else { return "No group".into() };
-        let m = g.members.iter().find(|m| m.wid == g.used).unwrap_or(&g.members[0]);
+        let shown = |i: usize| !g.layout.is_hidden(i);
+        let m = g.members.iter().enumerate().filter(|(i, _)| shown(*i)).max_by_key(|(_, m)| m.wid == g.used).map_or(&g.members[0], |(_, m)| m);
         let (pid, wid, elem) = (m.pid, m.wid, m.elem.clone());
         activate(pid, &elem);
         a.come_to(Some(id), wid);
@@ -1049,6 +1270,8 @@ extern "C" fn follow_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
 extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
     with_try(|a| {
         a.counter = a.counter.wrapping_add(1);
+        a.watch_mission_control();
+        a.trace_order();
         a.verify_raise();
         if a.counter % 2 == 0 {
             a.watch_front();
@@ -1196,11 +1419,13 @@ pub fn mission_control_labels(mx: f64, my: f64) -> Option<Vec<Label>> {
             return Some(Vec::new());
         }
         let all = ax::all_windows();
-        if !ax::mission_control_open(&all) || a.verify.is_some() || a.mc_pick.is_some() {
+        if !ax::mission_control_open(&all) || a.verify.is_some() {
             return Some(Vec::new());
         }
         // thumbnails of one app overlap, so only the topmost under the pointer counts
-        let top = on_top_at(&ax::normal(&all), mx, my).map(|w| w.id);
+        let order = ax::normal(&all);
+        let top = on_top_at(&order, mx, my).map(|w| w.id);
+        a.hover_in_mission_control(top, &order);
         let mut out = Vec::new();
         for g in &a.groups {
             let mut pids: Vec<i32> = g.members.iter().map(|m| m.pid).collect();

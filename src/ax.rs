@@ -203,6 +203,57 @@ pub fn is_trusted(prompt: bool) -> bool {
     unsafe { AXIsProcessTrustedWithOptions(dict.as_concrete_TypeRef()) }
 }
 
+type Psn = [u32; 2];
+struct Slps {
+    get: unsafe extern "C" fn(i32, *mut Psn) -> i32,
+    front: unsafe extern "C" fn(*const Psn, u32, u32) -> i32,
+    post: unsafe extern "C" fn(*const Psn, *const u8) -> i32,
+}
+
+/// Private calls for giving a window the keyboard without moving it (as yabai does).
+fn slps() -> Option<&'static Slps> {
+    static FNS: std::sync::OnceLock<Option<Slps>> = std::sync::OnceLock::new();
+    unsafe extern "C" {
+        fn dlopen(path: *const std::ffi::c_char, mode: i32) -> *mut c_void;
+        fn dlsym(h: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
+    }
+    FNS.get_or_init(|| unsafe {
+        let h = dlopen(c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight".as_ptr(), 1);
+        if h.is_null() {
+            return None;
+        }
+        let get = dlsym(-2isize as *mut c_void, c"GetProcessForPID".as_ptr());
+        let front = dlsym(h, c"_SLPSSetFrontProcessWithOptions".as_ptr());
+        let post = dlsym(h, c"SLPSPostEventRecordTo".as_ptr());
+        if get.is_null() || front.is_null() || post.is_null() {
+            return None;
+        }
+        Some(Slps { get: std::mem::transmute(get), front: std::mem::transmute(front), post: std::mem::transmute(post) })
+    })
+    .as_ref()
+}
+
+/// Give a window the keyboard and leave it where it is in the stack.
+pub fn focus_without_raising(pid: i32, wid: u32) -> bool {
+    let Some(f) = slps() else { return false };
+    let mut psn: Psn = [0; 2];
+    unsafe {
+        if (f.get)(pid, &mut psn) != 0 || (f.front)(&psn, wid, 0x400) != 0 {
+            return false;
+        }
+        for step in [1u8, 2] {
+            let mut rec = [0u8; 0xf8];
+            rec[0x04] = 0xf8;
+            rec[0x08] = step;
+            rec[0x3a] = 0x10;
+            rec[0x3c..0x40].copy_from_slice(&wid.to_ne_bytes());
+            rec[0x20..0x30].fill(0xff);
+            (f.post)(&psn, rec.as_ptr());
+        }
+    }
+    true
+}
+
 /// Mission Control and App Exposé put a full-screen Dock window on layer 18 and shrink
 /// everything in the window list, so positions mean nothing while it is open.
 pub fn mission_control_open(all: &[WinInfo]) -> bool {

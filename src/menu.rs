@@ -6,7 +6,7 @@ use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, Sel};
 use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, Message, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSAppearanceCustomization, NSBackingStoreType, NSBezierPath, NSButton, NSColor, NSControlSize,
-    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSFloatingWindowLevel, NSFont, NSImage,
+    NSEvent, NSEventModifierFlags, NSFloatingWindowLevel, NSFont, NSImage,
     NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel, NSRunningApplication, NSScrollView, NSScroller, NSScrollerPart, NSScrollerStyle,
     NSStatusBarButton, NSTextField, NSTextFieldBezelStyle, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
 };
@@ -154,6 +154,7 @@ impl Handler {
         let m = app::menu_model();
         menu.removeAllItems();
         menu.setAutoenablesItems(false);
+        menu.setShowsStateColumn(false);
 
         if !m.trusted {
             let i = self.item("Allow wingroup to move windows…", "lock.shield", Some(sel!(openPrivacy:)), 0);
@@ -173,7 +174,7 @@ impl Handler {
             Some(tiles) => {
                 let i = self.item(&format!("Tile {} Windows", tiles.len()), "", Some(sel!(tileVisible:)), 0);
                 subtitle(&i, &names(tiles));
-                i.setImage(Some(&icons(mtm, tiles, 28.0)));
+                i.setImage(Some(&padded(mtm, &icons(mtm, tiles, 28.0), false)));
                 key(&i, "t");
                 menu.addItem(&i);
             }
@@ -301,10 +302,10 @@ impl Handler {
         scroll.setDrawsBackground(false);
         scroll.setHasVerticalScroller(content_h > list_h);
         scroll.setAutohidesScrollers(true);
-        scroll.setScrollerStyle(NSScrollerStyle::Overlay);
         let bar: Retained<SlimScroller> = unsafe { msg_send![mtm.alloc::<SlimScroller>(), initWithFrame: frame(0.0, 0.0, 10.0, list_h)] };
+        bar.setScrollerStyle(NSScrollerStyle::Legacy);
         scroll.setVerticalScroller(Some(&bar));
-        scroll.setScrollerStyle(NSScrollerStyle::Overlay);
+        scroll.setScrollerStyle(NSScrollerStyle::Legacy);
         scroll.setDocumentView(Some(&list));
         // start at the top of the list
         list.scrollPoint(NSPoint::new(0.0, content_h));
@@ -358,16 +359,20 @@ impl Handler {
     fn group_item(&self, mtm: MainThreadMarker, g: &MenuGroup, windows: &[MenuWindow]) -> Retained<NSMenuItem> {
         let i = self.item(&g.name, "", None, g.id);
         i.setEnabled(true);
-        i.setImage(Some(&icons(mtm, &g.tiles, 22.0)));
-        i.setState(if g.active { NSControlStateValueOn } else { NSControlStateValueOff });
+        i.setImage(Some(&padded(mtm, &icons(mtm, &g.tiles, 22.0), false)));
+        if g.active {
+            subtitle(&i, "In use");
+        }
         let sub = NSMenu::new(mtm);
         sub.setAutoenablesItems(false);
+        sub.setShowsStateColumn(false);
         sub.addItem(&self.item("Switch To", "arrow.up.forward.app", Some(sel!(switchTo:)), g.id));
         sub.addItem(&NSMenuItem::separatorItem(mtm));
         let room = g.tiles.len() < app::MAX_TILES;
         sub.addItem(&self.item("Add Windows…", "plus.rectangle.on.rectangle", room.then_some(sel!(addWindows:)), g.id));
         let out = NSMenu::new(mtm);
         out.setAutoenablesItems(false);
+        out.setShowsStateColumn(false);
         for t in &g.tiles {
             let mut name = app::app_name(t.pid);
             // two windows of one app need telling apart
@@ -377,7 +382,7 @@ impl Handler {
                 }
             }
             let i = self.item(&name, "", Some(sel!(removeWindow:)), t.wid);
-            i.setImage(icon(t.pid, 18.0).as_deref());
+            i.setImage(icon(t.pid, 18.0).map(|g| padded(mtm, &g, false)).as_deref());
             out.addItem(&i);
         }
         let r = self.item("Remove from Group", "minus.rectangle", None, 0);
@@ -410,7 +415,7 @@ impl Handler {
         i.setEnabled(action.is_some());
         if !symbol.is_empty() {
             let img = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(symbol), None);
-            i.setImage(img.as_deref());
+            i.setImage(img.map(|g| padded(mtm, &g, true)).as_deref());
         }
         i
     }
@@ -439,21 +444,28 @@ define_class!(
     struct SlimScroller;
 
     impl SlimScroller {
-        #[unsafe(method(isCompatibleWithOverlayScrollers))]
-        fn overlay_ok() -> bool {
-            true
+        #[unsafe(method(scrollerWidthForControlSize:scrollerStyle:))]
+        fn bar_width(_size: NSControlSize, _style: NSScrollerStyle) -> f64 {
+            14.0
         }
-        #[unsafe(method(drawKnob))]
-        fn draw_knob(&self) {
-            let k = self.rectForPart(NSScrollerPart::Knob);
-            let r = frame(k.origin.x + k.size.width - 7.0, k.origin.y + 2.0, 4.0, (k.size.height - 4.0).max(8.0));
-            NSColor::labelColor().colorWithAlphaComponent(0.22).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 1.5, 1.5).fill();
+        #[unsafe(method(drawRect:))]
+        fn draw(&self, _r: NSRect) {
+            self.draw_bar();
         }
-        #[unsafe(method(drawKnobSlotInRect:highlight:))]
-        fn draw_slot(&self, _r: NSRect, _h: bool) {}
     }
 );
+
+impl SlimScroller {
+    fn draw_bar(&self) {
+        let k = self.rectForPart(NSScrollerPart::Knob);
+        if k.size.height < 8.0 {
+            return;
+        }
+        let r = frame(k.origin.x + (k.size.width - 9.0) / 2.0, k.origin.y + 2.0, 9.0, k.size.height - 4.0);
+        NSColor::labelColor().colorWithAlphaComponent(0.24).setFill();
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 2.5, 2.5).fill();
+    }
+}
 
 const MARGIN: f64 = 28.0;
 /// Space above a dialog's content (title and hint) and below it (buttons).
@@ -636,6 +648,21 @@ fn icon(pid: i32, size: f64) -> Option<Retained<NSImage>> {
     let img = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?.icon()?;
     img.setSize(NSSize::new(size, size));
     Some(img)
+}
+
+/// The image with room above and below. A menu row is as tall as its image, and AppKit has
+/// no other way to make rows roomier.
+#[allow(deprecated)]
+fn padded(mtm: MainThreadMarker, img: &NSImage, symbol: bool) -> Retained<NSImage> {
+    const PAD: f64 = 3.0;
+    let s = img.size();
+    let w = if symbol { s.width.max(16.0) } else { s.width };
+    let out = NSImage::initWithSize(mtm.alloc::<NSImage>(), NSSize::new(w, s.height + 2.0 * PAD));
+    out.lockFocus();
+    img.drawInRect(frame((w - s.width) / 2.0, PAD, s.width, s.height));
+    out.unlockFocus();
+    out.setTemplate(symbol); // keeps following the menu's text colour
+    out
 }
 
 /// The apps' icons in a row, every one the same size.
