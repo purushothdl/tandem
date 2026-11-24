@@ -17,6 +17,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::NSString;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// The bar's height, its layout pictures, and how round it and its entries are.
@@ -47,7 +48,7 @@ const SPACES: f64 = 40.0;
 /// Mission Control shows the Dock even when it is set to hide.
 const DOCK: f64 = 70.0;
 /// Thumbnails must have been still this long.
-const STILL: Duration = Duration::from_millis(90);
+const STILL: Duration = Duration::from_millis(60);
 /// After a press Mission Control is most likely closing: stay away.
 const AWAY: Duration = Duration::from_millis(700);
 
@@ -80,6 +81,15 @@ struct State {
     presses: u32,
     down: bool,
     away: Option<Instant>,
+    /// The smallest the thumbnails have been since they last rested.
+    area: f64,
+    /// Mission Control has only just opened, so the place it had last time still holds.
+    fresh: bool,
+    /// Placed by where the thumbnails ended up, not yet where they did last time.
+    placed: bool,
+    /// Where it went for these windows before: they get the same thumbnails again, so it
+    /// can come up along with them.
+    known: HashMap<(Vec<u32>, (u32, u32)), (usize, (f64, f64))>,
 }
 
 /// What the labels need to know.
@@ -218,6 +228,7 @@ fn close(s: &mut State) {
         }
     }
     s.at = None;
+    s.placed = false;
     s.alpha = 0.0;
 }
 
@@ -227,6 +238,8 @@ pub fn hide() {
         let mut s = s.borrow_mut();
         close(&mut s);
         s.away = None;
+        s.area = 0.0;
+        s.fresh = true;
         s.presses = presses();
         s.down = NSEvent::pressedMouseButtons() & 1 != 0;
     });
@@ -283,9 +296,25 @@ fn low_spot(w: f64, h: f64, screen_w: f64, floor: f64, taken: &[Rect]) -> Option
     })
 }
 
+fn show(s: &mut State, which: usize, (x, y): (f64, f64), screen_h: f64) {
+    if s.at == Some((x, y)) && s.which == which {
+        return;
+    }
+    if s.at.is_none() {
+        s.alpha = 0.0;
+    } else if s.which != which {
+        s.bars[s.which].panel.orderOut(None::<&AnyObject>);
+    }
+    let b = &s.bars[which];
+    b.panel.setAlphaValue(s.alpha);
+    b.panel.setFrame_display(rect(x, screen_h - y - b.size.h, b.width, b.size.h), true);
+    b.panel.orderFrontRegardless();
+    (s.which, s.at) = (which, Some((x, y)));
+}
+
 /// `calm`: how long no thumbnail has moved.
 pub fn refresh(mtm: MainThreadMarker, calm: Duration, mx: f64, my: f64, screen_h: f64) -> Now {
-    let Some((cards, taken)) = app::mission_control_cards() else { return Now::default() };
+    let Some(app::Overview { cards, taken, ids, area }) = app::mission_control_cards() else { return Now::default() };
     let mut chosen = None;
     let now = STATE.with(|s| {
         let mut s = s.borrow_mut();
@@ -313,24 +342,48 @@ pub fn refresh(mtm: MainThreadMarker, calm: Duration, mx: f64, my: f64, screen_h
             close(s);
             return Now { away: true, ..Default::default() };
         }
-        if calm < STILL {
+        let still = calm >= STILL;
+        if still || s.area == 0.0 {
+            s.area = area;
+        }
+        s.area = s.area.min(area);
+        // closing (more than the small bounce at the end of opening), or rearranging
+        if area > s.area * 1.06 || (s.placed && !still) {
+            s.fresh = false;
             close(s);
             return Now::default();
         }
-        if s.at.is_none() {
+        let key = (ids, (sw as u32, screen_h as u32));
+        if still && !s.placed {
             let floor = (screen_h - free.origin.y).min(screen_h - DOCK);
             let found = spot([s.bars[0].width, s.bars[1].width], sw, floor, &taken);
             if found.is_none() && !s.crowded {
                 app::log(&format!("no room for the group bar: floor {floor:.0}, taken {taken:?}"));
             }
             s.crowded = found.is_none();
-            let Some((which, (x, y))) = found else { return Now::default() };
-            s.which = which;
-            let b = &s.bars[which];
-            b.panel.setAlphaValue(0.0);
-            b.panel.setFrame_display(rect(x, screen_h - y - b.size.h, b.width, b.size.h), true);
-            b.panel.orderFrontRegardless();
-            s.at = Some((x, y));
+            if s.known.len() > 60 {
+                s.known.clear();
+            }
+            match found {
+                Some((k, p)) => {
+                    if s.fresh {
+                        s.known.insert(key, (k, p));
+                    }
+                    show(s, k, p, screen_h);
+                }
+                None => {
+                    s.known.remove(&key);
+                    close(s);
+                    return Now::default();
+                }
+            }
+            s.placed = true;
+            s.fresh = false;
+        } else if s.at.is_none() {
+            match s.known.get(&key).copied().filter(|_| s.fresh) {
+                Some((k, p)) => show(s, k, p, screen_h),
+                None => return Now::default(),
+            }
         }
         let b = &mut s.bars[s.which];
         if s.alpha < 1.0 {

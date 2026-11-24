@@ -1073,17 +1073,24 @@ impl App {
     }
 
     /// Ten times a second. Asks only the window server, so a hung app cannot stall it.
+    fn note_mission_control(&mut self, all: &[WinInfo]) -> bool {
+        if !ax::mission_control_open(all) {
+            return false;
+        }
+        if self.mc_seen.is_none_or(|t| t.elapsed() > Duration::from_millis(400)) {
+            self.mc_origin = ax::normal(all).first().map(|w| (w.pid, w.id));
+            self.mc_top = self.mc_origin.map_or(0, |o| o.1);
+            self.mc_hover = None;
+            self.prepared = None;
+        }
+        self.mc_seen = Some(Instant::now());
+        true
+    }
+
     fn tick(&mut self) {
         self.learn();
         let all = ax::all_windows();
-        if ax::mission_control_open(&all) {
-            if self.mc_seen.is_none_or(|t| t.elapsed() > Duration::from_millis(400)) {
-                self.mc_origin = ax::normal(&all).first().map(|w| (w.pid, w.id));
-                self.mc_top = self.mc_origin.map_or(0, |o| o.1);
-                self.mc_hover = None;
-                self.prepared = None;
-            }
-            self.mc_seen = Some(Instant::now());
+        if self.note_mission_control(&all) {
             return;
         }
         let order = ax::normal(&all);
@@ -1618,6 +1625,9 @@ extern "C" fn fast_cb(_t: CFRunLoopTimerRef, _info: *mut c_void) {
         }
         if a.counter % 6 == 0 {
             a.tick();
+        } else if a.counter % 2 == 0 && !a.groups.is_empty() {
+            // between ticks too, so the bar comes up with the thumbnails
+            a.note_mission_control(&ax::all_windows());
         }
     });
     finish_card();
@@ -1853,9 +1863,18 @@ fn assign(tiles: &[(Rect, i32)], places: &[Rect]) -> (f64, Vec<(Rect, i32)>) {
     (total, out)
 }
 
+pub struct Overview {
+    pub cards: Vec<Card>,
+    pub taken: Vec<Rect>,
+    /// Every window shown.
+    pub ids: Vec<u32>,
+    /// Of all thumbnails together: shrinks while Mission Control opens, grows as it closes.
+    pub area: f64,
+}
+
 /// A card per group with a window on screen, the group in use first, and the places taken
 /// by thumbnails and what Mission Control draws on them.
-pub fn mission_control_cards() -> Option<(Vec<Card>, Vec<Rect>)> {
+pub fn mission_control_cards() -> Option<Overview> {
     with_try(|a| {
         let all = ax::all_windows();
         let order = ax::normal(&all);
@@ -1879,7 +1898,10 @@ pub fn mission_control_cards() -> Option<(Vec<Card>, Vec<Rect>)> {
         cards.sort_by_key(|c| a.active != Some(c.group));
         let small = |w: &WinInfo| w.layer == 17 && w.bounds.w < d.w * 0.5;
         let taken = order.iter().chain(all.iter().filter(|w| small(w))).filter(|w| w.pid != me).map(|w| w.bounds).collect();
-        Some((cards, taken))
+        let mut ids: Vec<u32> = order.iter().map(|w| w.id).collect();
+        ids.sort_unstable();
+        let area = order.iter().map(|w| w.bounds.w * w.bounds.h).sum();
+        Some(Overview { cards, taken, ids, area })
     })?
 }
 
